@@ -1,14 +1,14 @@
 import torch
 from torch import nn, tensor
 from nets import discrete_net, continuous_net, critic
+from torch.distributions import Normal, Categorical
 
-device = (torch.device('cuda') if torch.cuda_is_available() else torch.device('cpu'))
 # an implementation of the actor-critic 
 class actor_critic(nn.Module):
 	def __init__(self, state_dim:int, action_dim:int, 
 		hidden_dim:int, num_layers:int, 
-		dropout:int, action_std_init:float, continuous:bool):
-		super.__init__(self, actor_critic)
+		dropout:int, action_std_init:float, continuous:bool) -> None:
+		super().__init__()
 		self.state_dim = state_dim
 		self.action_dim = action_dim
 		self.hidden_dim = hidden_dim
@@ -19,7 +19,10 @@ class actor_critic(nn.Module):
 		if(continuous):
 			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 			# the variance of the action space, which we use to sample from the normal distribution
-			self.action_var = torch.full((action_dim, ), action_std_init ** 2).to(device)
+			# this supports std decay from the user
+			self.action_var = torch.full((action_dim,), action_std_init ** 2)
+			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
+
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
@@ -30,15 +33,15 @@ class actor_critic(nn.Module):
 	# set the new action std. We will also set a new action variance
 	def set_action_std(self, new_action_std:float):
 		self.action_std_init = new_action_std
-		self.action_var = torch.full((action_dim, ), self.action_std_init ** 2).to(device)
+		self.action_var = torch.full((action_dim, ), self.action_std_init ** 2)
 
 	def act(self, state):
 		if(self.continuous):
-			means = self.actor(state)
-			cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
-			dist = MultivariateNormal(means, cov_mat)
-			# rsample vs sample
-			action = dist.rsample()
+			action_mean = self.actor(stat)
+	        action_logstd = self.actor_logstd.expand_as(action_mean)
+	        action_std = torch.exp(action_logstd)
+	        probs = Normal(action_mean, action_std)
+			action = probs.sample()
 		else:
 			probs = self.actor(state)
 			dist = Categorical(probs)
@@ -50,12 +53,11 @@ class actor_critic(nn.Module):
 		return action.detach(), log_prob.detach(), state_value.detach()
 
 	def evaluate(self, state, action):
-		# for the policy evaluation, we create a multivariate distribution similar
-		# to the act method
 		if(self.continuous):
-			means = self.actor(state)
-			cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
-			dist = MultivariateNormal(means, cov_mat)
+			action_mean = self.actor(state)
+			action_logstd = self.actor_logstd.expand_as(action_mean)
+			dist = Normal(action_mean, action_logstd)
+			action = dist.rsample()
 		else:
 			probs = self.actor(state)
 			dist = Categorical(probs)
@@ -63,6 +65,4 @@ class actor_critic(nn.Module):
 		log_prob = dist.log_prob(action)	
 		state_value = self.critic(state)
 		entropy = dist.entropy()
-
-		# we don't detach these tensors, because we will use their gradients in the backwards pass
 		return log_prob, state_value, entropy

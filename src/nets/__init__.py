@@ -1,1 +1,1 @@
-from .nets import discrete_net, critic
+from .nets import discrete_net, continuous_net, critic
