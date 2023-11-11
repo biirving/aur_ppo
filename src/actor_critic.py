@@ -17,10 +17,6 @@ class actor_critic(nn.Module):
 		self.dropout = dropout
 		if(continuous):
 			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
-			# the variance of the action space, which we use to sample from the normal distribution
-			# this supports std decay from the user
-			self.action_var = torch.full((action_dim,), action_std_init ** 2)
-			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
@@ -31,14 +27,14 @@ class actor_critic(nn.Module):
 	# set the new action std. We will also set a new action variance
 	def set_action_std(self, new_action_std:float):
 		self.action_std_init = new_action_std
-		self.action_var = torch.full((action_dim, ), self.action_std_init ** 2)
+		self.action_var = torch.full((self.action_dim, ), self.action_std_init ** 2)
 
 	def act(self, state):
 		if(self.continuous):
-			action_mean = self.actor(stat)
-	        action_logstd = self.actor_logstd.expand_as(action_mean)
-	        action_std = torch.exp(action_logstd)
-	        probs = Normal(action_mean, action_std)
+			action_mean = self.actor(state)
+			action_logstd = self.actor_logstd.expand_as(action_mean)
+			action_std = torch.exp(action_logstd)
+			probs = Normal(action_mean, action_std)
 			action = probs.sample()
 		else:
 			probs = self.actor(state)

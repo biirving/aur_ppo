@@ -16,13 +16,13 @@ class discrete_net(nn.Module):
         layers = [layer_init(nn.Linear(input_dim, dim)), nn.Tanh(), nn.Dropout(dropout)]
         for _ in range(num_layers - 1):
             layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
-        # use simple linear layer instead of softmax function
         layers.append(layer_init(nn.Linear(dim, output_dim)))
         layers.append(nn.Softmax(dim=0))
         self.net = nn.Sequential(*layers)
     
     def forward(self, input:tensor) -> tensor:
-        return self.net(input)
+        return self.net(input / 255.0)
+
 
 class continuous_net(nn.Module):
     def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float) -> None:

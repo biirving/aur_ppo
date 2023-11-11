@@ -3,6 +3,7 @@ from ppo import ppo
 import os, sys, argparse, time
 
 
+
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='CartPole-v1')
@@ -10,7 +11,7 @@ if __name__=='__main__':
 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=400)
 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
 	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=25000)
-	parser.add_argument('-al', '--anneal_lr', type=lambda x: bool(strtobool(x)), help='How to anneal our learning rate', default=True)
+	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
 	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
@@ -20,10 +21,15 @@ if __name__=='__main__':
 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
 	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=0.2)
-	parser.add_argument('-na', '--norm_adv', type=lambda x: bool(strtobool(x)), help='Normalize advantage estimates', default=True)
-	parser.add_argument('-p', '--capture_video', type=lambda x: bool(strtobool(x)), help='Whether to capture the video or not', default=False)
+	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
+	parser.add_argument('-p', '--capture_video', type=bool, help='Whether to capture the video or not', default=False)
 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
-	parser.add_argument('-c', '--continuous', type=lambda x: bool(strbool(x)), help='Is the action space continuous',default=False)
+	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=False)
+	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=5e-4)
+	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='CartPole PPO')
+	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
+	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
+	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
 	args = parser.parse_args()
 
 	params = {
@@ -44,7 +50,14 @@ if __name__=='__main__':
 		'target_kl':args.target_kl,
 		'norm_adv':args.norm_adv,
 		'capture_video':args.capture_video,
-		'hidden_dim':args.hidden_dim
+		'hidden_dim':args.hidden_dim,
+		'continuous':args.continuous,
+		'learning_rate':args.learning_rate, 
+		'hidden_dim':args.hidden_dim,
+		'exp_name':args.exp_name,
+		'num_layers':args.num_layers,
+		'dropout':args.dropout,
+		'gamma':args.gamma
 	}
 
 	to_run = ppo(params)
