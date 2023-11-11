@@ -12,11 +12,11 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 class torch_buffer():
 	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
 		self.states = torch.zeros((num_steps, num_envs) + action_shape).to(device)
-	    self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
-	    self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
-	    self.rewards = torch.zeros((num_steps, num_envs)).to(device)
-	    self.terminals = torch.zeros((num_steps, num_envs)).to(device)
-	    self.values = torch.zeros((num_steps, num_envs)).to(device)
+		self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
+		self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
+		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
+		self.terminals = torch.zeros((num_steps, num_envs)).to(device)
+		self.values = torch.zeros((num_steps, num_envs)).to(device)
 
 # generalize training loop
 class ppo():
@@ -28,8 +28,6 @@ class ppo():
 		self.num_steps = params['num_steps']
 		self.gae = params['gae']
 		self.total_timesteps = params['total_timesteps']
-		self.batch_size = params['batch_size']
-		self.num_updates = params['num_updates']
 		self.anneal_lr = params['anneal_lr']
 		self.gae_lambda = params['gae_lambda']
 		self.num_update_epochs = params['num_update_epochs']
@@ -39,16 +37,20 @@ class ppo():
 		self.minibatch_size = int(self.batch_size // self.num_minibatches)
 		self.entropy_coeff = params['entropy_coeff']
 		self.value_coeff = params['value_coeff']
-		self.grad_norm = params['grad_norm']
+		self.clip_coef = params['clip_coeff']
+		self.max_grad_norm = params['max_grad_norm']
 		self.target_kl = params['target_kl']
-		self.agent = actor_critic()
 		self.norm_adv = params['norm_adv']
+		self.hidden_dim = params['hidden_dim']
+		self.continuous = params['continuous']
+		self.num_updates = self.total_timesteps // self.batch_size
 		run_name = f"{self.gym_id}__{self.exp_name}__{self.seed}__{int(time.time())}"
-		# env setup for vectorized environment
 	    self.env = gym.vector.SyncVectorEnv(
-	        [make_env(self.gym_id, self.seed + i, i, params['capture_video'], run_name) for i in range(self.num_envs)]
+	    	[make_env(self.gym_id, self.seed + i, i, self.capture_video, run_name) for i in range(self.num_envs)]
 	    )
-	   
+		self.agent = actor_critic(self.envs.single_observation_space.shape, 
+			self.envs.single_action_space.shape, self.hidden_dim, self.continuous)
+
 	def make_env(self, gym_id, seed, idx, capture_video, run_name):
 	    def thunk():
 	        env = gym.make(gym_id)
@@ -77,7 +79,6 @@ class ppo():
     def advantages(self, next_obs, next_done):
         with torch.no_grad():
             next_value = self.policy_old.critic.forward(next_obs).reshape(1, -1)
-
             # generalized advantage estimation
             if self.gae:
                 advantages = torch.zeros_like(self.buffer.rewards).to(device)
@@ -121,7 +122,6 @@ class ppo():
     	start_time = time.time()
     	next_obs = torch.Tensor(self.env.reset()).to(device)
     	next_done = torch.zeros(self.num_envs).to(device)
-    	num_updates = self.total_timesteps // self.batch_size
     	for update in range(1, self.num_updates + 1):
 	        if self.anneal_lr:
 	            frac = 1.0 - (update - 1.0) / self.num_updates
@@ -133,7 +133,6 @@ class ppo():
 	            dones[step] = next_done
 				next_obs, next_done = rewards_to_go_and_advantages(step, next_obs)
 			returns, advantages = advantages(next_obs, next_done)
-
 			# we flatten here to have access to all of the environment returns
 	        b_obs = self.buffer.states.reshape((-1,) + self.env.single_observation_space.shape)
 	        b_logprobs = self.buffer.log_probs.reshape(-1)
@@ -141,7 +140,6 @@ class ppo():
 	        b_advantages = advantages.reshape(-1)
 	        b_returns = returns.reshape(-1)
 	        b_values = self.buffer.values.reshape(-1)
-
 	        b_inds = np.arrange(self.batch_size)
 	        clip_fracs = []
 	        policy_losses = []
@@ -150,50 +148,36 @@ class ppo():
 	        	for index in range(0, self.batch_size, self.minibatch_size):
 	                mb_inds = b_inds[index:index+self.minibatch_size]
 	                log_prob, state_value, entropy = self.agent.evaluate(b_obs[mb_inds])
-
 	                log_ratio = log_prob - b_logprobs[mb_inds]
 	                ratio = log_ratio.exp()
-
 	                # to check for early stopping. should remain below 0.2
 	                with torch.no_grad():
 	                    # http://joschu.net/blog/kl-approx.html
 	                    old_approx_kl = (-log_ratio).mean()
 	                    approx_kl = ((ratio - 1) - log_ratio).mean()
 	                    clipfracs += [((ratio - 1.0).abs() > self.clip_coef).float().mean().item()]
-
 	                # we normalize at the minibatch level
 	                mb_advantages = b_advantages[mb_inds]
 	                # 1e-8 avoids division by 0
 	                if self.norm_adv:
 	                	mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
-
 	                # gradient descent, rather than ascent
 	                loss_one = -mb_advantages * ratio
 	                loss_two = -torch.clamp(torch.max(ratio, 1 - self.clip_coef), max=1 + self.clip_coef) * mb_advantages
 	                policy_loss = torch.max(loss_one, loss_two)
-
 	                # we are taking the mean to support minibatching
 	                value_loss = 0.5 * (((state_value - b_values)) ** 2).mean()
 	                # no value clipping here
 	                entropy_loss = entropy.mean()
 	                loss = loss - self.entropy_coeff * entropy_loss + v_loss * self.value_coeff
-
 	                self.optimizer.zero_grad()
 	                loss.backward()
 	                nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
 	                self.optimizer.step()
-
                 if self.target_kl is not None:
 	                if approx_kl > self.target_kl:
 	                    break
-
 	        # fix debug metrics           	
 	        policy_losses.append(policy_loss.item())
 	    self.plot(policy_losses)
-
-
-
-
-
-
 

@@ -7,7 +7,7 @@ from torch.distributions import Normal, Categorical
 class actor_critic(nn.Module):
 	def __init__(self, state_dim:int, action_dim:int, 
 		hidden_dim:int, num_layers:int, 
-		dropout:int, action_std_init:float, continuous:bool) -> None:
+		dropout:int, continuous:bool) -> None:
 		super().__init__()
 		self.state_dim = state_dim
 		self.action_dim = action_dim
@@ -15,14 +15,12 @@ class actor_critic(nn.Module):
 		self.continuous = continuous
 		self.num_layers = num_layers
 		self.dropout = dropout
-		self.action_std_init = action_std_init
 		if(continuous):
 			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 			# the variance of the action space, which we use to sample from the normal distribution
 			# this supports std decay from the user
 			self.action_var = torch.full((action_dim,), action_std_init ** 2)
 			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
-
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
@@ -48,7 +46,6 @@ class actor_critic(nn.Module):
 			action = dist.sample()
 		log_prob = dist.log_prob(action)	
 		state_value = self.critic(state)
-
 		# running the policy to produce values for replay buffer. Can detach.
 		return action.detach(), log_prob.detach(), state_value.detach()
 

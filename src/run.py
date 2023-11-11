@@ -2,41 +2,50 @@ import torch
 from ppo import ppo
 import os, sys, argparse, time
 
-self.gym_id = params['gym_id']
-		self.exp_name = params['exp_name']
-		self.seed = params['seed']
-		self.num_steps = params['num_steps']
-		self.gae = params['gae']
-		self.total_timesteps = params['total_timesteps']
-		self.batch_size = params['batch_size']
-		self.num_updates = params['num_updates']
-		self.anneal_lr = params['anneal_lr']
-		self.gae_lambda = params['gae_lambda']
-		self.num_update_epochs = params['num_update_epochs']
-		self.num_envs = params['num_envs']
-		self.num_minibatches = params['num_minibatches']
-		self.batch_size = self.num_steps * self.num_envs
-		self.minibatch_size = int(self.batch_size // self.num_minibatches)
-		self.entropy_coeff = params['entropy_coeff']
-		self.value_coeff = params['value_coeff']
-		self.grad_norm = params['grad_norm']
-		self.target_kl = params['target_kl']
-		self.agent = actor_critic()
-		self.norm_adv = params['norm_adv']
-
-
 
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-id', '--gym_id', help='Id of the environment that we will use', default='CartPole-v1')
-	parser.add_argument('-s', '--seed', help='Seed for experiment', default=1.0)
-	parser.add_argument('-ns', '--num_steps', help='Number of steps that the environment should take', default=400)
-	parser.add_argument('-gae', '--gae', help='Generalized Advantage Estimation flag', default=True)
-	parser.add_argument('-t', '--total_timesteps', help='Total number of timesteps that we will take', default=25000)
-	parser.add_argument('-')
+	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='CartPole-v1')
+	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
+	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=400)
+	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
+	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=25000)
+	parser.add_argument('-al', '--anneal_lr', type=lambda x: bool(strtobool(x)), help='How to anneal our learning rate', default=True)
+	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
+	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
+	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
+	parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
+	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
+	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
+	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
+	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
+	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=0.2)
+	parser.add_argument('-na', '--norm_adv', type=lambda x: bool(strtobool(x)), help='Normalize advantage estimates', default=True)
+	parser.add_argument('-p', '--capture_video', type=lambda x: bool(strtobool(x)), help='Whether to capture the video or not', default=False)
+	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
+	parser.add_argument('-c', '--continuous', type=lambda x: bool(strbool(x)), help='Is the action space continuous',default=False)
 	args = parser.parse_args()
 
 	params = {
 		'gym_id':args.gym_id,
-
+		'seed':args.seed,
+		'num_steps':args.num_steps,
+		'gae':args.gae,
+		'total_timesteps':args.total_timesteps,
+		'anneal_lr':args.anneal_lr,
+		'gae_lambda':args.gae_lambda,
+		'num_update_epochs':args.num_update_epochs,
+		'num_envs':args.num_envs,
+		'num_minibatches':args.num_minibatches,
+		'entropy_coeff':args.entropy_coeff,
+		'value_coeff':args.value_coeff,
+		'clip_coeff':args.clip_coeff,
+		'max_grad_norm':args.max_grad_norm,
+		'target_kl':args.target_kl,
+		'norm_adv':args.norm_adv,
+		'capture_video':args.capture_video,
+		'hidden_dim':args.hidden_dim
 	}
+
+	to_run = ppo(params)
+	to_run.train()
