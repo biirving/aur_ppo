@@ -2,6 +2,7 @@ import torch
 from torch import nn, tensor
 from nets import discrete_net, continuous_net, critic
 from torch.distributions import Normal, Categorical
+import numpy as np
 
 # an implementation of the actor-critic 
 class actor_critic(nn.Module):
@@ -17,6 +18,7 @@ class actor_critic(nn.Module):
 		self.dropout = dropout
 		if(continuous):
 			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
