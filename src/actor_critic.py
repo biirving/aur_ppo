@@ -46,6 +46,7 @@ class actor_critic(nn.Module):
 		state_value = self.critic(state)
 		# running the policy to produce values for replay buffer. Can detach.
 		return action.detach(), log_prob.detach(), state_value.detach()
+		
 
 	def evaluate(self, state, action):
 		if(self.continuous):
