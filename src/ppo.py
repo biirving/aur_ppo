@@ -112,6 +112,7 @@ class ppo():
 				for t in reversed(range(self.num_steps)):
 					if t == self.num_steps - 1:
 						nextnonterminal = 1.0 - next_done
+						# bootstrapped from previous values
 						nextvalues = next_value
 					else:
 						nextnonterminal = 1.0 - self.buffer.terminals[t + 1]
@@ -149,7 +150,6 @@ class ppo():
 				lrnow = frac * self.learning_rate
 				self.optimizer.param_groups[0]["lr"] = lrnow
 
-			# check for bugs
 			for step in range(0, self.num_steps):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_obs
@@ -165,7 +165,7 @@ class ppo():
 			b_returns = returns.reshape(-1)
 			b_values = self.buffer.values.reshape(-1)
 			b_inds = np.arange(self.batch_size)
-			clip_fracs = []
+			
 			for ep in range(self.num_update_epochs):
 				np.random.shuffle(b_inds)
 				for index in range(0, self.batch_size, self.minibatch_size):
@@ -177,7 +177,6 @@ class ppo():
 					with torch.no_grad():
 						old_approx_kl = (-log_ratio).mean()
 						approx_kl = ((ratio - 1) - log_ratio).mean()
-						clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
 					# we normalize at the minibatch level
 					mb_advantages = b_advantages[mb_inds]
 					# 1e-8 avoids division by 0
@@ -189,13 +188,7 @@ class ppo():
 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
 					policy_loss = torch.max(loss_one, loss_two).mean()
 					# mean squared error
-					#value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
-					#print(value_loss)
-					print(newvalue.view(-1).shape)
-					print(b_values[mb_inds].shape)
-					value_loss = nn.MSELoss(newvalue.view(-1), b_values[mb_inds])
-
-					# no value clipping here
+					value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
 					entropy_loss = entropy.mean()
  
 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
@@ -214,7 +207,6 @@ class ppo():
 
 		#torch.save(self.policy, 'actor_critic.pt')
 		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)))
-		#self.plot_episodic_returns(np.array(self.total_episode_lengths))
 
 	def plot(self, loss, x_indices):
 		print(loss.shape)
