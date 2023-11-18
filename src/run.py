@@ -2,19 +2,17 @@ import torch
 from ppo import ppo
 import os, sys, argparse, time
 
-
-
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='CartPole-v1')
 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
-	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=100000)
+	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
 	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
-	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
+	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=9)
 	parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)

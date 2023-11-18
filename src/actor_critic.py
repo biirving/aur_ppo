@@ -4,12 +4,16 @@ from nets import discrete_net, continuous_net, critic
 from torch.distributions import Normal, Categorical
 import numpy as np
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
 # an implementation of the actor-critic 
 class actor_critic(nn.Module):
 	def __init__(self, state_dim:int, action_dim:int, 
 		hidden_dim:int, num_layers:int, 
 		dropout:int, continuous:bool) -> None:
-		super().__init__()
+		super(actor_critic, self).__init__()
 		self.state_dim = state_dim
 		self.action_dim = action_dim
 		self.hidden_dim = hidden_dim
@@ -22,7 +26,7 @@ class actor_critic(nn.Module):
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
 		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
-
+		
 	def forward(self):
 		pass
 
@@ -40,25 +44,25 @@ class actor_critic(nn.Module):
 			action = probs.sample()
 		else:
 			probs = self.actor(state)
-			dist = Categorical(probs)
+			dist = Categorical(logits=probs)
 			action = dist.sample()
-		log_prob = dist.log_prob(action)	
-		state_value = self.critic(state)
 		# running the policy to produce values for replay buffer. Can detach.
-		return action.detach(), log_prob.detach(), state_value.detach()
-		
+		return action.detach().cpu(), dist.log_prob(action).detach().cpu(), self.critic(state).detach().cpu()
 
-	def evaluate(self, state, action):
+	def value(self, state):
+		return self.critic(state)
+
+	def evaluate(self, state, action=None):
 		if(self.continuous):
 			action_mean = self.actor(state)
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 			dist = Normal(action_mean, action_logstd)
 			action = dist.rsample()
 		else:
-			probs = self.actor(state)
-			dist = Categorical(probs)
-			action = dist.sample()
-		log_prob = dist.log_prob(action)	
-		state_value = self.critic(state)
+			logits = self.actor(state)
+			dist = Categorical(logits=logits)
+			if(action is None):
+				action = dist.sample()
+		#log_prob = dist.log_prob(action)	
 		entropy = dist.entropy()
-		return log_prob, state_value, entropy
+		return action, dist.log_prob(action), dist.entropy(), self.critic(state)

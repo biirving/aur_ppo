@@ -5,6 +5,8 @@ from torch.distributions import Categorical, Normal, MultivariateNormal
 import torch.nn.functional as F
 import numpy as np
 
+
+
 # orthogonal initialization
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
@@ -12,40 +14,41 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
         return layer
 
 class discrete_net(nn.Module):
-    def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float) -> None:
+    # at a torch datatype flag to allow changes to floating point size
+    def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
         super().__init__()
-        layers = [layer_init(nn.Linear(input_dim, dim)), nn.Tanh(), nn.Dropout(dropout)]
+        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
         for _ in range(num_layers - 1):
-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
-        layers.append(layer_init(nn.Linear(dim, output_dim)))
-        layers.append(nn.Softmax(dim=0))
+            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
+        layers.append(layer_init(nn.Linear(dim, output_dim), action_std))
+        #layers.append(nn.Softmax(dim=0))
         self.net = nn.Sequential(*layers)
     
     def forward(self, input:tensor) -> tensor:
-        return self.net(input / 255.0)
+        return self.net(input)
 
 
 class continuous_net(nn.Module):
-    def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float) -> None:
+    def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
         super().__init__()
         layers = [layer_init(nn.Linear(input_dim, dim)), nn.Tanh(), nn.Dropout(dropout)]
         for _ in range(num_layers - 1):
             layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
         # use simple linear layer instead of softmax function
-        layers.append(layer_init(nn.Linear(dim, np.prod(output_dim))), std=0.01)
+        layers.append(layer_init(nn.Linear(dim, np.prod(output_dim))), action_std)
         self.net = nn.Sequential(*layers)
 
     def forward(self, input:tensor) -> tensor:
         return self.net(input)
 
 class critic(nn.Module):
-    def __init__(self, dim:int, input_dim:int, num_layers:int, dropout:float) -> None:
+    def __init__(self, dim:int, input_dim:int, num_layers:int, dropout:float, action_std=1.0) -> None:
         super().__init__()
-        layers = [layer_init(nn.Linear(input_dim, dim)), nn.Tanh(), nn.Dropout()]
+        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
         for _ in range(num_layers - 1):
-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
+            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
         # use simple linear layer instead of softmax function
-        layers.append(layer_init(nn.Linear(dim, 1)))
+        layers.append(layer_init(nn.Linear(dim, 1), action_std))
         self.net = nn.Sequential(*layers)
     def forward(self, input:tensor) -> tensor:
         return self.net(input)
