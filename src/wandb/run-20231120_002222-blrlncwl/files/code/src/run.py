@@ -26,7 +26,7 @@ if __name__=='__main__':
 	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=False)
 	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2e-4)
 	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='CartPole PPO')
-	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
+	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=10)
 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=True)

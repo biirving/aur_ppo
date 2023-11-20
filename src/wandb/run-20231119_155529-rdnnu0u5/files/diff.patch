@@ -1,0 +1,389 @@
+diff --git a/src/actor_critic.pt b/src/actor_critic.pt
+index d074684..b7fc62d 100644
+Binary files a/src/actor_critic.pt and b/src/actor_critic.pt differ
+diff --git a/src/nets/nets.py b/src/nets/nets.py
+index 2108c4a..86d72e7 100644
+--- a/src/nets/nets.py
++++ b/src/nets/nets.py
+@@ -17,9 +17,9 @@ class discrete_net(nn.Module):
+     # at a torch datatype flag to allow changes to floating point size
+     def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
+         super().__init__()
+-        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
++        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh(), nn.Dropout(dropout)]
+         for _ in range(num_layers - 1):
+-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
++            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
+         layers.append(layer_init(nn.Linear(dim, output_dim), action_std))
+         #layers.append(nn.Softmax(dim=0))
+         self.net = nn.Sequential(*layers)
+diff --git a/src/ppo.py b/src/ppo.py
+index 1d1ca07..d1713e9 100644
+--- a/src/ppo.py
++++ b/src/ppo.py
+@@ -9,12 +9,15 @@ import numpy as np
+ import matplotlib.pyplot as plt
+ from tqdm import tqdm
+ import sys, os, time
++from torch.utils.tensorboard import SummaryWriter
+ 
+ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+ device = torch.device('cpu')
+ 
+ class torch_buffer():
+ 	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
++		self.observation_shape = observation_shape
++		self.action_shape = action_shape
+ 		self.states = torch.zeros((num_steps, num_envs) +  observation_shape).to(device)
+ 		self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
+ 		self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
+@@ -22,12 +25,22 @@ class torch_buffer():
+ 		self.terminals = torch.zeros((num_steps, num_envs)).to(device)
+ 		self.values = torch.zeros((num_steps, num_envs)).to(device)
+ 
+-# generalize training loop
+-# Debug this mf
++	# flatten the buffer values for evaluation
++	def flatten(self, returns, advantages):
++		b_obs = self.states.reshape((-1,) + self.observation_shape)
++		b_logprobs = self.log_probs.reshape(-1)
++		b_actions = self.actions.reshape((-1,) + self.action_shape)
++		b_advantages = advantages.reshape(-1)
++		b_returns = returns.reshape(-1)
++		b_values = self.values.reshape(-1)
++		return b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
++
++# implement their plotting strategies
++# weights and biases graphs
+ class ppo():
+ 	# add the metrics
+ 	def __init__(self, params):
+-		self.batch_size = None
++		self.all_steps = None
+ 		self.minibatch_size = None
+ 		# Define a list of attributes to exclude from direct assignment
+ 		exclude_list = ['batch_size', 'minibatch_size']
+@@ -37,12 +50,15 @@ class ppo():
+ 			if key not in exclude_list:
+ 				# Dynamically set the attribute based on the key-value pair
+ 				setattr(self, key, value)
+-		self.batch_size = self.num_steps * self.num_envs
+-		self.minibatch_size = int(self.batch_size // self.num_minibatches)
+-		self.num_updates = self.total_timesteps // self.batch_size
+-		run_name = f"{self.gym_id}__{self.exp_name}__{self.seed}__{int(time.time())}"
++
++		# Tht total steps x the number of envs represents how many total
++		# steps in the said environment will be taken by the training loop		
++		self.all_steps = self.num_steps * self.num_envs
++		self.minibatch_size = int(self.all_steps // self.num_minibatches)
++		self.num_updates = self.total_timesteps // self.all_steps
++		self.run_name = f"{self.gym_id}__{self.exp_name}__{self.seed}__{int(time.time())}"
+ 		self.envs = gym.vector.SyncVectorEnv(
+-	    	[self.make_env(self.gym_id, int(self.seed) + i, i, params['capture_video'], run_name) for i in range(self.num_envs)]
++	    	[self.make_env(self.gym_id, int(self.seed) + i, i, params['capture_video']) for i in range(self.num_envs)]
+ 	    )
+ 		self.state_dim = self.envs.single_observation_space.shape
+ 		if(self.continuous):
+@@ -64,13 +80,13 @@ class ppo():
+ 		self.total_episode_lengths = []
+ 		self.x_indices = []
+ 
+-	def make_env(self, gym_id, seed, idx, capture_video, run_name):
++	def make_env(self, gym_id, seed, idx, capture_video):
+ 		def thunk():
+ 			env = gym.make(gym_id)
+ 			env = gym.wrappers.RecordEpisodeStatistics(env)
+ 			if capture_video:
+ 				if idx == 0:
+-					env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
++					env = gym.wrappers.RecordVideo(env, f"videos/{self.run_name}")
+ 			if(self.continuous):
+ 				env = gym.wrappers.ClipAction(env)
+ 				env = gym.wrappers.NormalizeObservation(env)
+@@ -84,7 +100,7 @@ class ppo():
+ 		return thunk
+ 
+     # do the O(1) accesses slow down the code to a significant degree
+-	def rewards_to_go(self, step, next_obs, global_step):
++	def rewards_to_go(self, step, next_obs, global_step, writer):
+ 		with torch.no_grad():
+ 			#action, logprob, _, value= self.agent.get_action_and_value(next_obs)
+ 			action, logprob, value = self.policy_old.act(next_obs)
+@@ -97,6 +113,8 @@ class ppo():
+ 					self.total_returns.append(item["episode"]["r"])
+ 					self.total_episode_lengths.append(item["episode"]["l"])
+ 					self.x_indices.append(global_step)
++					writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
++					writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
+ 			self.buffer.rewards[step] = torch.tensor(reward).to(device).view(-1)
+ 			# torch.Tensor outputs a Float tensor, while tensor.tensor infers a dtype
+ 			next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+@@ -115,9 +133,11 @@ class ppo():
+ 						# bootstrapped from previous values
+ 						nextvalues = next_value
+ 					else:
++						# if some time step is terminal, we create a mask
+ 						nextnonterminal = 1.0 - self.buffer.terminals[t + 1]
+ 						nextvalues = self.buffer.values[t + 1]
+ 					# nextnonterminal is a mask
++					# delta for our td difference 
+ 					delta = self.buffer.rewards[t] + self.gamma * nextvalues * nextnonterminal - self.buffer.values[t]
+ 					advantages[t] = lastgaelam = delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
+ 				returns = advantages + self.buffer.values
+@@ -135,40 +155,42 @@ class ppo():
+ 		return returns, advantages
+ 
+ 	def train(self):
+-		#print(self.agent.actor[0].weight)
+-		#print(self.agent_new.actor[0].weight)
+-		#print('old policy', self.policy_old.actor.net[0].weight)
+-		#print('new policy', self.policy.actor.net[0].weight)
++		if self.track:
++			import wandb
++			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
++		writer = SummaryWriter(f"runs/{self.run_name}")
++		writer.add_text(
++		    "hyperparameters",
++		    "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
++		)
++
+ 		global_step = 0
+ 		start_time = time.time()
+ 		next_obs = torch.Tensor(self.envs.reset()).to(device)
+ 		next_done = torch.zeros(self.num_envs).to(device)
+ 		policy_losses = []
+ 		for update in range(1, self.num_updates + 1):
++			# adjust learning rate
+ 			if self.anneal_lr:
+ 				frac = 1.0 - (update - 1.0) / self.num_updates
+ 				lrnow = frac * self.learning_rate
+ 				self.optimizer.param_groups[0]["lr"] = lrnow
+ 
++			# generate rewards to go for environment before update 
+ 			for step in range(0, self.num_steps):
+ 				global_step += 1 * self.num_envs
+ 				self.buffer.states[step] = next_obs
+ 				self.buffer.terminals[step] = next_done
+-				next_obs, next_done = self.rewards_to_go(step, next_obs, global_step)		
+-
++				next_obs, next_done = self.rewards_to_go(step, next_obs, global_step, writer)		
+ 			returns, advantages = self.advantages(next_obs, next_done)
+-			# we flatten here to have access to all of the environment returns
+-			b_obs = self.buffer.states.reshape((-1,) + self.envs.single_observation_space.shape)
+-			b_logprobs = self.buffer.log_probs.reshape(-1)
+-			b_actions = self.buffer.actions.reshape((-1,) + self.envs.single_action_space.shape)
+-			b_advantages = advantages.reshape(-1)
+-			b_returns = returns.reshape(-1)
+-			b_values = self.buffer.values.reshape(-1)
+-			b_inds = np.arange(self.batch_size)
+-			
++			(b_obs, b_logprobs, b_actions, 
++				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
++			b_inds = np.arange(self.all_steps)
++
+ 			for ep in range(self.num_update_epochs):
+-				np.random.shuffle(b_inds)
+-				for index in range(0, self.batch_size, self.minibatch_size):
++				# we randomize before processing the minibatches
++				#np.random.shuffle(b_inds)
++				for index in range(0, self.all_steps, self.minibatch_size):
+ 					mb_inds = b_inds[index:index+self.minibatch_size]
+ 					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions.long()[mb_inds])
+ 					log_ratio = newlogprob - b_logprobs[mb_inds]
+@@ -182,31 +204,44 @@ class ppo():
+ 					# 1e-8 avoids division by 0
+ 					if self.norm_adv:
+ 						mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
+-
+ 					# gradient descent, rather than ascent
+ 					loss_one = -mb_advantages * ratio
+ 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
+ 					policy_loss = torch.max(loss_one, loss_two).mean()
++					policy_losses.append(policy_loss.item())
+ 					# mean squared error
+ 					value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
+ 					entropy_loss = entropy.mean()
+- 
+ 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
+ 					self.optimizer.zero_grad()
+-
+ 					loss.backward()
+ 					nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+ 					self.optimizer.step()
+-
+ 				if self.target_kl is not None:
+ 					if approx_kl > self.target_kl:
+ 						break
+-
+ 			self.policy_old.load_state_dict(self.policy.state_dict())
+ 			policy_losses.append(policy_loss.item())
+ 
+-		#torch.save(self.policy, 'actor_critic.pt')
++			# TRY NOT TO MODIFY: record rewards for plotting purposes
++			writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
++			writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
++			writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
++			writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
++			writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
++			writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
++			writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
++			writer.add_scalar("losses/explained_variance", explained_var, global_step)
++			print("SPS:", int(global_step / (time.time() - start_time)))
++			writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
++		envs.close()
++		writer.close()
++
++		torch.save(self.policy, 'actor_critic.pt')
+ 		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)))
++		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)))
++
++		#self.plot_episodic_returns(np.array(policy_losses), np.arange(len(policy_losses)))
+ 
+ 	def plot(self, loss, x_indices):
+ 		print(loss.shape)
+diff --git a/src/run.py b/src/run.py
+index e4d0aa6..014b166 100644
+--- a/src/run.py
++++ b/src/run.py
+@@ -1,3 +1,4 @@
++#!/usr/bin/env python
+ import torch
+ from ppo import ppo
+ import os, sys, argparse, time
+@@ -8,11 +9,11 @@ if __name__=='__main__':
+ 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
+ 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
+ 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
+-	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
++	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=250000)
+ 	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
+ 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
+ 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
+-	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=9)
++	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
+ 	parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
+ 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
+ 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
+@@ -25,9 +26,10 @@ if __name__=='__main__':
+ 	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=False)
+ 	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2e-4)
+ 	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='CartPole PPO')
+-	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
++	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=10)
+ 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
+ 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
++	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=True)
+ 	args = parser.parse_args()
+ 
+ 	params = {
+@@ -55,7 +57,8 @@ if __name__=='__main__':
+ 		'exp_name':args.exp_name,
+ 		'num_layers':args.num_layers,
+ 		'dropout':args.dropout,
+-		'gamma':args.gamma
++		'gamma':args.gamma,
++		'track':args.track
+ 	}
+ 
+ 	to_run = ppo(params)
+diff --git a/src/test.py b/src/test.py
+index c3fc960..853fe81 100644
+--- a/src/test.py
++++ b/src/test.py
+@@ -1,5 +1,6 @@
+ from torch import nn, tensor
+-import gymnasium as gym
++#import gymnasium as gym
++import gym
+ import torch
+ from torch import nn, tensor
+ from torch.distributions import Categorical
+@@ -12,35 +13,27 @@ from ppo import ppo
+ 
+ device = (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+ 
+-class reinforce():
+-    def __init__(self, gamma:float, alpha:float, env, dim:int, layers:int, dropout:float):
++# a class to run our trained models
++class test():
++    def __init__(self, model, env, render_mode):
+         self.env = gym.make(env)
+         input_dim = self.env.observation_space.shape[0]
+         output_dim = self.env.action_space.n
+-        #self.net = Net(dim, input_dim, output_dim, layers, dropout).to(device)
+-        #self.net = torch.load('reinforce.pt')
+-        self.agent = torch.load('actor_critic.pt')
+-        self.alpha = alpha
+-        self.gamma = gamma
+-    def ema_plot(self, loss):
+-        timesteps = np.arange(1, loss.shape[0] + 1)
+-        alpha = 0.2  # Adjust this smoothing factor as needed
+-        ema = [loss[0]]
+-        for r in loss[1:]:
+-            ema.append(alpha * r + (1 - alpha) * ema[-1])
+-        plt.plot(timesteps, ema)
+-        plt.xlabel('Timestep')
+-        plt.ylabel('Neg log prob loss')
+-        plt.title('Loss')
+-        plt.show()
+-        #plt.close()
+-    def plot(self, loss):
+-        timesteps = np.arange(1, loss.shape[0] + 1)
+-        plt.plot(timesteps, loss)
+-        plt.xlabel('Timestep')
+-        plt.ylabel('Episode length')
+-        plt.title('Episode Length over time')
++        self.agent = torch.load(model)
++
++    def moving_average(self, data, window_size):
++        return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
++
++    def plot_episodic_returns(self, episodic_returns, x_indices, window_size=10):
++        smoothed_returns = self.moving_average(episodic_returns, window_size)
++        plt.plot(x_indices, episodic_returns, label='Episodic Returns')
++        plt.plot(x_indices[9:], smoothed_returns, label=f'Moving Average (Window Size = {window_size})', color='red')
++        plt.title('Episode lengths')
++        plt.xlabel('Episode')
++        plt.ylabel('Length')
++        plt.legend()
+         plt.show()
++
+     def run(self, episodes, max_length=10000):
+         #optim = torch.optim.Adam(self.net.parameters(), lr=5e-5)
+         all_rewards = []
+@@ -48,21 +41,24 @@ class reinforce():
+         episode_lenghts = []
+         for _ in tqdm(range(episodes)):
+             self.agent.zero_grad()
+-            state, _ = self.env.reset()
++            state = self.env.reset()
+             state = torch.from_numpy(state)
+             log_probs = []
+             rewards = []
+             # run the episode
+-            for _ in range(max_length):
+-                action, log_prob, _ = self.agent.act(state.to(device)) 
+-                next_state, reward, is_terminal, _, _ = self.env.step(action.item())
+-                log_probs.append(log_prob)
+-                rewards.append(reward)
+-                if is_terminal:
+-                    break
++            with torch.no_grad():
++                for _ in range(max_length):
++                    action, log_prob, value  = self.agent.act(state.to(device)) 
++                    next_state, reward, is_terminal, info = self.env.step(action.item())
++                    rewards.append(reward)
++                    if is_terminal:
++                        break
+                 state = torch.from_numpy(next_state)
+             episode_lenghts.append(len(rewards))
+-        self.plot(np.array(episode_lenghts)) 
++        # episode lengths
++        self.plot_episodic_returns(np.array(episode_lenghts), np.arange(len(episode_lenghts)))
++test = test('actor_critic.pt', 'CartPole-v1', render_mode=None)
++test.run(1000)
++
++
+ 
+-test = reinforce(0.9, 1.0, "CartPole-v1", 64, 2, 0.0)
+-test.run(10000)

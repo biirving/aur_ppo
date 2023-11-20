@@ -17,9 +17,9 @@ class discrete_net(nn.Module):
     # at a torch datatype flag to allow changes to floating point size
     def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
         super().__init__()
-        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
+        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh(), nn.Dropout(dropout)]
         for _ in range(num_layers - 1):
-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
+            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
         layers.append(layer_init(nn.Linear(dim, output_dim), action_std))
         #layers.append(nn.Softmax(dim=0))
         self.net = nn.Sequential(*layers)
