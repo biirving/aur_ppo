@@ -1,0 +1,188 @@
+{
+    "os": "Linux-3.10.0-1160.25.1.el7.x86_64-x86_64-with-glibc2.17",
+    "python": "3.9.13",
+    "heartbeatAt": "2023-11-22T19:04:15.262441",
+    "startedAt": "2023-11-22T19:04:14.533923",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/work/nlp/b.irving/aur_ppo/src/run.py",
+    "codePathLocal": "run.py",
+    "codePath": "src/run.py",
+    "git": {
+        "remote": "https://github.com/biirving/aur_ppo.git",
+        "commit": "51f7e01357d231b46be4a23dfaeab7629c43bc76"
+    },
+    "email": "biirving30@gmail.com",
+    "root": "/work/nlp/b.irving/aur_ppo",
+    "host": "c2185",
+    "username": "irving.b",
+    "executable": "/work/nlp/b.irving/.conda/envs/new_prone/bin/python",
+    "cpu_count": 28,
+    "cpu_count_logical": 28,
+    "cpu_freq": {
+        "current": 1.4350000000000003,
+        "min": 1200.0,
+        "max": 3300.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 1.296,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.597,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.209,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.315,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.499,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.184,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.278,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.385,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.6,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.379,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.381,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.377,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.399,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.24,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.217,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.22,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 1.2,
+            "min": 1200.0,
+            "max": 3300.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 19.521484375,
+            "used": 9.755653381347656
+        }
+    },
+    "gpu": "Tesla P100-PCIE-12GB",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "Tesla P100-PCIE-12GB",
+            "memory_total": 12884901888
+        }
+    ],
+    "memory": {
+        "total": 503.63782119750977
+    }
+}
