@@ -1,0 +1,375 @@
+diff --git a/src/actor_critic.pt b/src/actor_critic.pt
+deleted file mode 100644
+index 7096862..0000000
+Binary files a/src/actor_critic.pt and /dev/null differ
+diff --git a/src/actor_critic.py b/src/actor_critic.py
+deleted file mode 100644
+index 3e32602..0000000
+--- a/src/actor_critic.py
++++ /dev/null
+@@ -1,68 +0,0 @@
+-import torch
+-from torch import nn, tensor
+-from nets import discrete_net, continuous_net, critic
+-from torch.distributions import Normal, Categorical
+-import numpy as np
+-
+-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+-    torch.nn.init.orthogonal_(layer.weight, std)
+-    torch.nn.init.constant_(layer.bias, bias_const)
+-    return layer
+-# an implementation of the actor-critic 
+-class actor_critic(nn.Module):
+-	def __init__(self, state_dim:int, action_dim:int, 
+-		hidden_dim:int, num_layers:int, 
+-		dropout:int, continuous:bool) -> None:
+-		super(actor_critic, self).__init__()
+-		self.state_dim = state_dim
+-		self.action_dim = action_dim
+-		self.hidden_dim = hidden_dim
+-		self.continuous = continuous
+-		self.num_layers = num_layers
+-		self.dropout = dropout
+-		if(continuous):
+-			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+-			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
+-		else:
+-			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+-		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
+-		
+-	def forward(self):
+-		pass
+-
+-	# set the new action std. We will also set a new action variance
+-	def set_action_std(self, new_action_std:float):
+-		self.action_std_init = new_action_std
+-		self.action_var = torch.full((self.action_dim, ), self.action_std_init ** 2)
+-
+-	def act(self, state):
+-		if(self.continuous):
+-			action_mean = self.actor(state)
+-			action_logstd = self.actor_logstd.expand_as(action_mean)
+-			action_std = torch.exp(action_logstd)
+-			probs = Normal(action_mean, action_std)
+-			action = probs.sample()
+-		else:
+-			probs = self.actor(state)
+-			dist = Categorical(logits=probs)
+-			action = dist.sample()
+-		# running the policy to produce values for replay buffer. Can detach.
+-		return action.detach().cpu(), dist.log_prob(action).detach().cpu(), self.critic(state).detach().cpu()
+-
+-	def value(self, state):
+-		return self.critic(state)
+-
+-	def evaluate(self, state, action=None):
+-		if(self.continuous):
+-			action_mean = self.actor(state)
+-			action_logstd = self.actor_logstd.expand_as(action_mean)
+-			dist = Normal(action_mean, action_logstd)
+-			action = dist.rsample()
+-		else:
+-			logits = self.actor(state)
+-			dist = Categorical(logits=logits)
+-			if(action is None):
+-				action = dist.sample()
+-		#log_prob = dist.log_prob(action)	
+-		entropy = dist.entropy()
+-		return action, dist.log_prob(action), dist.entropy(), self.critic(state)
+diff --git a/src/actor_critic_10.pt b/src/actor_critic_10.pt
+index fd8ae27..648329b 100644
+Binary files a/src/actor_critic_10.pt and b/src/actor_critic_10.pt differ
+diff --git a/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png
+index 32beab5..d6df299 100644
+Binary files a/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png and b/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png differ
+diff --git a/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png b/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index 288f73a..0000000
+Binary files a/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png
+index 33255d5..47989f4 100644
+Binary files a/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png and b/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png differ
+diff --git a/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png b/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index bb4b85e..0000000
+Binary files a/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/grid_search.sh b/src/grid_search.sh
+old mode 100644
+new mode 100755
+index a293d1e..74ac1c4
+--- a/src/grid_search.sh
++++ b/src/grid_search.sh
+@@ -3,4 +3,33 @@
+ 
+ # search for the best PPO parameters
+ 
+-# run PPO without updating weights and biases charts
+\ No newline at end of file
++# run PPO without updating weights and biases charts
++time_steps=1700000
++for batch in 1 4 8 16 32 64
++do
++for layer in 2 8 16 32
++do 
++for env in 4 8 16 32
++do 
++for dim in 64 128 256
++do 
++for dropout in 0.0 0.2 0.4 0.8
++do
++#job=$(sbatch -p gpu --time=08:00:00 --mem=32GB --gres=gpu:p100:1 --output=/work/nlp/b.irving/ppo_outputs/$batch'_'$env'_'$dim'_'$dropout'_'%j.out run.py -nm $batch -nl $layer -ne $env -d $dim -do $dropout -t=$time_steps)
++job=`sbatch -p short \
++--time=08:00:00 \
++--mem=32GB \
++ --output=/work/nlp/b.irving/ppo_outputs/$batch'_'$env'_'$dim'_'$dropout'_'%j.out \
++ run.py \
++ -nm $batch \
++ -nl $layer \
++ -ne $env \
++ -d $dim \
++ -do $dropout \
++ --t=$time_steps | awk '{print $NF}'`
++echo $job
++done
++done
++done
++done
++done
+\ No newline at end of file
+diff --git a/src/ppo.py b/src/ppo.py
+index e567492..bb191fe 100644
+--- a/src/ppo.py
++++ b/src/ppo.py
+@@ -11,16 +11,22 @@ from tqdm import tqdm
+ import sys, os, time
+ from torch.utils.tensorboard import SummaryWriter
+ from tqdm import tqdm
++import random
+ 
+ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+ #device = torch.device('cpu')
++seed = 1
++random.seed(seed)
++np.random.seed(seed)
++torch.manual_seed(seed)
++torch.backends.cudnn.deterministic = True 
+ 
+ #print(device)
+ class torch_buffer():
+ 	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
+ 		self.observation_shape = observation_shape
+ 		self.action_shape = action_shape
+-		self.states = torch.zeros((num_steps, num_envs) +  observation_shape).to(device)
++		self.states = torch.zeros((num_steps, num_envs) + observation_shape).to(device)
+ 		self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
+ 		self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
+ 		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
+@@ -46,6 +52,10 @@ class torch_buffer():
+ class ppo():
+ 	# add the metrics
+ 	def __init__(self, params):
++		# for summarization
++		# accessing through the dictionary is slower
++		self.params_dict = params
++
+ 		self.all_steps = None
+ 		self.minibatch_size = None
+ 		# Define a list of attributes to exclude from direct assignment
+@@ -60,8 +70,9 @@ class ppo():
+ 		# Tht total steps x the number of envs represents how many total
+ 		# steps in the said environment will be taken by the training loop		
+ 		self.all_steps = self.num_steps * self.num_envs
++		self.batch_size = int(self.num_envs * self.num_steps)
+ 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
+-		self.num_updates = self.total_timesteps // self.all_steps
++		self.num_updates = self.total_timesteps // self.batch_size
+ 		self.run_name = f"{self.gym_id}__{self.exp_name}__{self.seed}__{int(time.time())}"
+ 		self.envs = gym.vector.SyncVectorEnv(
+ 	    	[self.make_env(self.gym_id, i, params['capture_video']) for i in range(self.num_envs)]
+@@ -177,6 +188,10 @@ class ppo():
+ 			import wandb
+ 			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
+ 		writer = SummaryWriter(f"runs/{self.run_name}")
++		writer.add_text(
++        "hyperparameters",
++        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{self.params_dict[key]}|" for key in self.params_dict])),
++    	)
+ 		global_step = 0
+ 		start_time = time.time()
+ 		next_obs = torch.Tensor(self.envs.reset(seed=list(range(self.num_envs)))[0]).to(device)
+@@ -200,16 +215,18 @@ class ppo():
+ 
+ 			(b_obs, b_logprobs, b_actions, 
+ 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
+-			b_inds = np.arange(self.all_steps)
++			b_inds = np.arange(self.batch_size)
+ 			clip_fracs = []
+ 			for ep in range(self.num_update_epochs):
+ 				# we randomize before processing the minibatches
+-				#np.random.shuffle(b_inds)
+-				for index in range(0, self.all_steps, self.minibatch_size):
++				np.random.shuffle(b_inds)
++				for index in range(0, self.batch_size, self.minibatch_size):
+ 					mb_inds = b_inds[index:index+self.minibatch_size]
++
+ 					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions.long()[mb_inds])
+ 					log_ratio = newlogprob - b_logprobs[mb_inds]
+ 					ratio = log_ratio.exp()
++
+ 					# to check for early stopping. should remain below 0.2
+ 					with torch.no_grad():
+ 						old_approx_kl = (-log_ratio).mean()
+@@ -255,6 +272,7 @@ class ppo():
+ 			writer.add_scalar("losses/explained_variance", explained_var, global_step)
+ 			#print("SPS:", int(global_step / (time.time() - start_time)))
+ 			writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
++
+ 		self.envs.close()
+ 		writer.close()
+ 		torch.save(self.policy, 'actor_critic_' + str(self.num_layers) + '.pt')
+diff --git a/src/robot_test.py b/src/robot_test.py
+index ac23034..61e1741 100644
+--- a/src/robot_test.py
++++ b/src/robot_test.py
+@@ -1,11 +1,59 @@
+-import gymnasium as gym
+-import panda_gym
+-env = gym.make('PandaReach-v3') 
+-observation, info = env.reset()
+-for _ in range(1000):
+-    action = env.action_space.sample() # random action
+-    observation, reward, terminated, truncated, info = env.step(action)
+-    print(observation)
+-    if terminated or truncated:
+-        observation, info = env.reset()
+-env.close()
+\ No newline at end of file
++import sys
++sys.path.append('..')
++sys.path.append('/work/nlp/b.irving/equi_rl/helping_hands_rl_envs')
++import torch
++from helping_hands_rl_envs import env_factory
++class EnvWrapper:
++    def __init__(self, num_processes, simulator, env, env_config, planner_config):
++        self.envs = env_factory.createEnvs(num_processes, env, env_config, planner_config)
++
++    def reset(self):
++        (states, in_hands, obs) = self.envs.reset()
++        states = torch.tensor(states).float()
++        obs = torch.tensor(obs).float()
++        return states, obs
++
++    def getNextAction(self):
++        return torch.tensor(self.envs.getNextAction()).float()
++
++    def step(self, actions, auto_reset=False):
++        actions = actions.cpu().numpy()
++        (states_, in_hands_, obs_), rewards, dones = self.envs.step(actions, auto_reset)
++        states_ = torch.tensor(states_).float()
++        obs_ = torch.tensor(obs_).float()
++        rewards = torch.tensor(rewards).float()
++        dones = torch.tensor(dones).float()
++        return states_, obs_, rewards, dones
++
++    def stepAsync(self, actions, auto_reset=False):
++        actions = actions.cpu().numpy()
++        self.envs.stepAsync(actions, auto_reset)
++
++    def stepWait(self):
++        (states_, in_hands_, obs_), rewards, dones = self.envs.stepWait()
++        states_ = torch.tensor(states_).float()
++        obs_ = torch.tensor(obs_).float()
++        rewards = torch.tensor(rewards).float()
++        dones = torch.tensor(dones).float()
++        return states_, obs_, rewards, dones
++
++    def getStepLeft(self):
++        return torch.tensor(self.envs.getStepsLeft()).float()
++
++    def reset_envs(self, env_nums):
++        states, in_hands, obs = self.envs.reset_envs(env_nums)
++        states = torch.tensor(states).float()
++        obs = torch.tensor(obs).float()
++        return states, obs
++
++    def close(self):
++        self.envs.close()
++
++    def saveToFile(self, envs_save_path):
++        return self.envs.saveToFile(envs_save_path)
++
++    def getEnvGitHash(self):
++        return self.envs.getEnvGitHash()
++
++    def getEmptyInHand(self):
++        return torch.tensor(self.envs.getEmptyInHand()).float()
+\ No newline at end of file
+diff --git a/src/run.py b/src/run.py
+index ec2847f..88557c1 100644
+--- a/src/run.py
++++ b/src/run.py
+@@ -5,17 +5,18 @@ import os, sys, argparse, time
+ import matplotlib.pyplot as plt
+ import numpy as np
+ 
+-def plot_curves(arr_list, legend_list, color_list, ylabel, fig_title):
++def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title):
+ 	plt.clf()
+ 	fig, ax = plt.subplots(figsize=(12, 8))
+ 	ax.set_ylabel(ylabel)
+ 	ax.set_xlabel("Steps")
+ 	h_list = []
++
+ 	for arr, legend, color in zip(arr_list, legend_list, color_list):
+ 		arr_err = arr.std(axis=0) / np.sqrt(arr.shape[0])
+-		h = ax.plot(range(arr.shape[1]), arr.mean(axis=0), color=color, label=legend)
++		h = ax.plot(x_indices, arr.mean(axis=0), color=color, label=legend)
+ 		arr_err = 1.96 * arr_err
+-		ax.fill_between(range(arr.shape[1]), arr.mean(axis=0) - arr_err, arr.mean(axis=0) + arr_err, alpha=0.3,
++		ax.fill_between(x_indices, arr.mean(axis=0) - arr_err, arr.mean(axis=0) + arr_err, alpha=0.3,
+ 		                color=color)
+ 		h_list.append(h)
+ 	ax.set_title(f"{fig_title}")
+@@ -39,14 +40,14 @@ if __name__=='__main__':
+ 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
+ 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
+ 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
+-	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=0.2)
++	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
+ 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
+ 	parser.add_argument('-p', '--capture_video', type=bool, help='Whether to capture the video or not', default=False)
+ 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
+ 	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=False)
+-	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2e-4)
++	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2.5e-4)
+ 	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='CartPole PPO')
+-	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=10)
++	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
+ 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
+ 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
+ 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=True)
+@@ -90,7 +91,11 @@ if __name__=='__main__':
+ 	total_returns, total_episode_lengths, x_indices = to_run.train()
+ 	#all_returns.append(total_returns)
+ 	#all_episode_lengths.append(total_episode_lengths)
+-	#print(len(x) for x in all_returns)
+-	#print(len(x) for x in all_episode_lengths)
+-	#plot_curves(np.array([all_returns]), ['Agent'], ['red'], 'Total Return', args.gym_id)
++
++	# Find the minimum length
++	#min_length = min(len(sublist) for sublist in all_returns)
++	#Trim each sublist to the minimum length
++	#trim_returns = [sublist[:min_length] for sublist in all_returns]
++	# then trim all of the trials down to the minimum length
++	#plot_curves(np.array([trim_returns]), ['Agent'], x_indices[:min_length], ['red'], 'Total Return', args.gym_id)
+ 	# plot with confidence bands and stuff
+\ No newline at end of file
+diff --git a/src/wandb/latest-run b/src/wandb/latest-run
+index c2964cd..c834d09 120000
+--- a/src/wandb/latest-run
++++ b/src/wandb/latest-run
+@@ -1 +1 @@
+-run-20231123_001914-gfdeytu5
+\ No newline at end of file
++run-20231201_211024-fjmf2ipa
+\ No newline at end of file

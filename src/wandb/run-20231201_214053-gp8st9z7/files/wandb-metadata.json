@@ -1,0 +1,120 @@
+{
+    "os": "Linux-3.10.0-1160.25.1.el7.x86_64-x86_64-with-glibc2.17",
+    "python": "3.9.13",
+    "heartbeatAt": "2023-12-02T02:40:53.884581",
+    "startedAt": "2023-12-02T02:40:53.225385",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/work/nlp/b.irving/aur_ppo/src/run.py",
+    "codePathLocal": "run.py",
+    "codePath": "src/run.py",
+    "git": {
+        "remote": "https://github.com/biirving/aur_ppo.git",
+        "commit": "66bde1fefa6177131e9741cc260e0daae8cd0b47"
+    },
+    "email": "biirving30@gmail.com",
+    "root": "/work/nlp/b.irving/aur_ppo",
+    "host": "c2003",
+    "username": "irving.b",
+    "executable": "/work/nlp/b.irving/.conda/envs/new_prone/bin/python",
+    "cpu_count": 16,
+    "cpu_count_logical": 16,
+    "cpu_freq": {
+        "current": 3.24675,
+        "min": 1200.0,
+        "max": 3300.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 3.296,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.199,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.229,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.093,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.185,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.295,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.2,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.299,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.294,
+            "min": 1200.0,
+            "max": 3300.0
+        },
+        {
+            "current": 3.262,
+            "min": 1200.0,
+            "max": 3300.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 49.9755859375,
+            "used": 10.12540054321289
+        }
+    },
+    "memory": {
+        "total": 377.6709403991699
+    }
+}

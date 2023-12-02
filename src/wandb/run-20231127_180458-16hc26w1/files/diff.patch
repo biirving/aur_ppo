@@ -1,0 +1,184 @@
+diff --git a/src/actor_critic.pt b/src/actor_critic.pt
+deleted file mode 100644
+index 7096862..0000000
+Binary files a/src/actor_critic.pt and /dev/null differ
+diff --git a/src/actor_critic.py b/src/actor_critic.py
+deleted file mode 100644
+index 3e32602..0000000
+--- a/src/actor_critic.py
++++ /dev/null
+@@ -1,68 +0,0 @@
+-import torch
+-from torch import nn, tensor
+-from nets import discrete_net, continuous_net, critic
+-from torch.distributions import Normal, Categorical
+-import numpy as np
+-
+-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+-    torch.nn.init.orthogonal_(layer.weight, std)
+-    torch.nn.init.constant_(layer.bias, bias_const)
+-    return layer
+-# an implementation of the actor-critic 
+-class actor_critic(nn.Module):
+-	def __init__(self, state_dim:int, action_dim:int, 
+-		hidden_dim:int, num_layers:int, 
+-		dropout:int, continuous:bool) -> None:
+-		super(actor_critic, self).__init__()
+-		self.state_dim = state_dim
+-		self.action_dim = action_dim
+-		self.hidden_dim = hidden_dim
+-		self.continuous = continuous
+-		self.num_layers = num_layers
+-		self.dropout = dropout
+-		if(continuous):
+-			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+-			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
+-		else:
+-			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+-		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
+-		
+-	def forward(self):
+-		pass
+-
+-	# set the new action std. We will also set a new action variance
+-	def set_action_std(self, new_action_std:float):
+-		self.action_std_init = new_action_std
+-		self.action_var = torch.full((self.action_dim, ), self.action_std_init ** 2)
+-
+-	def act(self, state):
+-		if(self.continuous):
+-			action_mean = self.actor(state)
+-			action_logstd = self.actor_logstd.expand_as(action_mean)
+-			action_std = torch.exp(action_logstd)
+-			probs = Normal(action_mean, action_std)
+-			action = probs.sample()
+-		else:
+-			probs = self.actor(state)
+-			dist = Categorical(logits=probs)
+-			action = dist.sample()
+-		# running the policy to produce values for replay buffer. Can detach.
+-		return action.detach().cpu(), dist.log_prob(action).detach().cpu(), self.critic(state).detach().cpu()
+-
+-	def value(self, state):
+-		return self.critic(state)
+-
+-	def evaluate(self, state, action=None):
+-		if(self.continuous):
+-			action_mean = self.actor(state)
+-			action_logstd = self.actor_logstd.expand_as(action_mean)
+-			dist = Normal(action_mean, action_logstd)
+-			action = dist.rsample()
+-		else:
+-			logits = self.actor(state)
+-			dist = Categorical(logits=logits)
+-			if(action is None):
+-				action = dist.sample()
+-		#log_prob = dist.log_prob(action)	
+-		entropy = dist.entropy()
+-		return action, dist.log_prob(action), dist.entropy(), self.critic(state)
+diff --git a/src/actor_critic_10.pt b/src/actor_critic_10.pt
+deleted file mode 100644
+index fd8ae27..0000000
+Binary files a/src/actor_critic_10.pt and /dev/null differ
+diff --git a/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index 32beab5..0000000
+Binary files a/src/episodic lengths_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png b/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index 288f73a..0000000
+Binary files a/src/episodic lengths_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index 33255d5..0000000
+Binary files a/src/episodic returns_num_layers_10_dropout_0.0_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png b/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png
+deleted file mode 100644
+index bb4b85e..0000000
+Binary files a/src/episodic returns_num_layers_10_dropout_0.4_num_envs_4_num_mb_4.png and /dev/null differ
+diff --git a/src/robot_test.py b/src/robot_test.py
+index ac23034..61e1741 100644
+--- a/src/robot_test.py
++++ b/src/robot_test.py
+@@ -1,11 +1,59 @@
+-import gymnasium as gym
+-import panda_gym
+-env = gym.make('PandaReach-v3') 
+-observation, info = env.reset()
+-for _ in range(1000):
+-    action = env.action_space.sample() # random action
+-    observation, reward, terminated, truncated, info = env.step(action)
+-    print(observation)
+-    if terminated or truncated:
+-        observation, info = env.reset()
+-env.close()
+\ No newline at end of file
++import sys
++sys.path.append('..')
++sys.path.append('/work/nlp/b.irving/equi_rl/helping_hands_rl_envs')
++import torch
++from helping_hands_rl_envs import env_factory
++class EnvWrapper:
++    def __init__(self, num_processes, simulator, env, env_config, planner_config):
++        self.envs = env_factory.createEnvs(num_processes, env, env_config, planner_config)
++
++    def reset(self):
++        (states, in_hands, obs) = self.envs.reset()
++        states = torch.tensor(states).float()
++        obs = torch.tensor(obs).float()
++        return states, obs
++
++    def getNextAction(self):
++        return torch.tensor(self.envs.getNextAction()).float()
++
++    def step(self, actions, auto_reset=False):
++        actions = actions.cpu().numpy()
++        (states_, in_hands_, obs_), rewards, dones = self.envs.step(actions, auto_reset)
++        states_ = torch.tensor(states_).float()
++        obs_ = torch.tensor(obs_).float()
++        rewards = torch.tensor(rewards).float()
++        dones = torch.tensor(dones).float()
++        return states_, obs_, rewards, dones
++
++    def stepAsync(self, actions, auto_reset=False):
++        actions = actions.cpu().numpy()
++        self.envs.stepAsync(actions, auto_reset)
++
++    def stepWait(self):
++        (states_, in_hands_, obs_), rewards, dones = self.envs.stepWait()
++        states_ = torch.tensor(states_).float()
++        obs_ = torch.tensor(obs_).float()
++        rewards = torch.tensor(rewards).float()
++        dones = torch.tensor(dones).float()
++        return states_, obs_, rewards, dones
++
++    def getStepLeft(self):
++        return torch.tensor(self.envs.getStepsLeft()).float()
++
++    def reset_envs(self, env_nums):
++        states, in_hands, obs = self.envs.reset_envs(env_nums)
++        states = torch.tensor(states).float()
++        obs = torch.tensor(obs).float()
++        return states, obs
++
++    def close(self):
++        self.envs.close()
++
++    def saveToFile(self, envs_save_path):
++        return self.envs.saveToFile(envs_save_path)
++
++    def getEnvGitHash(self):
++        return self.envs.getEnvGitHash()
++
++    def getEmptyInHand(self):
++        return torch.tensor(self.envs.getEmptyInHand()).float()
+\ No newline at end of file
+diff --git a/src/wandb/latest-run b/src/wandb/latest-run
+index c2964cd..818d7ce 120000
+--- a/src/wandb/latest-run
++++ b/src/wandb/latest-run
+@@ -1 +1 @@
+-run-20231123_001914-gfdeytu5
+\ No newline at end of file
++run-20231127_180458-16hc26w1
+\ No newline at end of file

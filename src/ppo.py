@@ -11,16 +11,22 @@ from tqdm import tqdm
 import sys, os, time
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import random
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 #device = torch.device('cpu')
+seed = 1
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.backends.cudnn.deterministic = True 
 
 #print(device)
 class torch_buffer():
 	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
 		self.observation_shape = observation_shape
 		self.action_shape = action_shape
-		self.states = torch.zeros((num_steps, num_envs) +  observation_shape).to(device)
+		self.states = torch.zeros((num_steps, num_envs) + observation_shape).to(device)
 		self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
 		self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
 		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
@@ -46,6 +52,10 @@ class torch_buffer():
 class ppo():
 	# add the metrics
 	def __init__(self, params):
+		# for summarization
+		# accessing through the dictionary is slower
+		self.params_dict = params
+
 		self.all_steps = None
 		self.minibatch_size = None
 		# Define a list of attributes to exclude from direct assignment
@@ -60,8 +70,9 @@ class ppo():
 		# Tht total steps x the number of envs represents how many total
 		# steps in the said environment will be taken by the training loop		
 		self.all_steps = self.num_steps * self.num_envs
+		self.batch_size = int(self.num_envs * self.num_steps)
 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
-		self.num_updates = self.total_timesteps // self.all_steps
+		self.num_updates = self.total_timesteps // self.batch_size
 		self.run_name = f"{self.gym_id}__{self.exp_name}__{self.seed}__{int(time.time())}"
 		self.envs = gym.vector.SyncVectorEnv(
 	    	[self.make_env(self.gym_id, i, params['capture_video']) for i in range(self.num_envs)]
@@ -177,6 +188,11 @@ class ppo():
 			import wandb
 			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
 		writer = SummaryWriter(f"runs/{self.run_name}")
+		writer.add_text("what", "what")
+		writer.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{self.params_dict[key]}|" for key in self.params_dict])),
+    	)
 		global_step = 0
 		start_time = time.time()
 		next_obs = torch.Tensor(self.envs.reset(seed=list(range(self.num_envs)))[0]).to(device)
@@ -200,16 +216,18 @@ class ppo():
 
 			(b_obs, b_logprobs, b_actions, 
 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
-			b_inds = np.arange(self.all_steps)
+			b_inds = np.arange(self.batch_size)
 			clip_fracs = []
 			for ep in range(self.num_update_epochs):
 				# we randomize before processing the minibatches
-				#np.random.shuffle(b_inds)
-				for index in range(0, self.all_steps, self.minibatch_size):
+				np.random.shuffle(b_inds)
+				for index in range(0, self.batch_size, self.minibatch_size):
 					mb_inds = b_inds[index:index+self.minibatch_size]
+
 					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions.long()[mb_inds])
 					log_ratio = newlogprob - b_logprobs[mb_inds]
 					ratio = log_ratio.exp()
+
 					# to check for early stopping. should remain below 0.2
 					with torch.no_grad():
 						old_approx_kl = (-log_ratio).mean()
@@ -225,8 +243,21 @@ class ppo():
 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
 					policy_loss = torch.max(loss_one, loss_two).mean()
 					policy_losses.append(policy_loss.item())
-					# mean squared error
-					value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
+
+					# value clipping
+					if self.clip_vloss:
+						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+						v_clipped = b_values[mb_inds] + torch.clamp(
+							newvalue - b_values[mb_inds],
+							-self.clip_coeff,
+							self.clip_coeff,
+						)
+						v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+						v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+						value_loss = 0.5 * v_loss_max.mean()
+					else:
+						value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
+
 					entropy_loss = entropy.mean()
 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
 					self.optimizer.zero_grad()
@@ -255,6 +286,7 @@ class ppo():
 			writer.add_scalar("losses/explained_variance", explained_var, global_step)
 			#print("SPS:", int(global_step / (time.time() - start_time)))
 			writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
 		self.envs.close()
 		writer.close()
 		torch.save(self.policy, 'actor_critic_' + str(self.num_layers) + '.pt')
