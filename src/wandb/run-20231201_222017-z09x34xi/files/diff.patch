@@ -1,9 +1,0 @@
-diff --git a/src/wandb/latest-run b/src/wandb/latest-run
-index 172d2d0..f191513 120000
---- a/src/wandb/latest-run
-+++ b/src/wandb/latest-run
-@@ -1 +1 @@
--run-20231201_214234-ephpfqat
-\ No newline at end of file
-+run-20231201_222017-z09x34xi
-\ No newline at end of file
