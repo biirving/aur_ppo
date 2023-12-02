@@ -14,12 +14,6 @@ from tqdm import tqdm
 import random
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-#device = torch.device('cpu')
-seed = 1
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.backends.cudnn.deterministic = True 
 
 #print(device)
 class torch_buffer():
@@ -35,14 +29,13 @@ class torch_buffer():
 
 	# flatten the buffer values for evaluation
 	def flatten(self, returns, advantages):
-		with torch.no_grad():
-			b_obs = self.states.reshape((-1,) + self.observation_shape)
-			b_logprobs = self.log_probs.reshape(-1)
-			b_actions = self.actions.reshape((-1,) + self.action_shape)
-			b_advantages = advantages.reshape(-1)
-			b_returns = returns.reshape(-1)
-			b_values = self.values.reshape(-1)
-			return b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
+		b_obs = self.states.reshape((-1,) + self.observation_shape)
+		b_logprobs = self.log_probs.reshape(-1)
+		b_actions = self.actions.reshape((-1,) + self.action_shape)
+		b_advantages = advantages.reshape(-1)
+		b_returns = returns.reshape(-1)
+		b_values = self.values.reshape(-1)
+		return b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
 
 # implement their plotting strategies
 # weights and biases graphs
@@ -174,7 +167,6 @@ class ppo():
 
 	def advantages(self, next_obs, next_done):
 		with torch.no_grad():
-			#next_value = self.policy_old.critic(next_obs).reshape(1, -1)
 			next_value = self.policy_old.value(next_obs)
 			if self.gae:
 				returns, advantages = self.run_gae(next_value, next_done)
@@ -191,8 +183,14 @@ class ppo():
 		writer.add_text("what", "what")
 		writer.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{self.params_dict[key]}|" for key in self.params_dict])),
+        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{str(self.params_dict[key])}|" for key in self.params_dict])),
     	)
+		seed = 1
+		random.seed(seed)
+		np.random.seed(seed)
+		torch.manual_seed(seed)
+		torch.backends.cudnn.deterministic = True 
+
 		global_step = 0
 		start_time = time.time()
 		next_obs = torch.Tensor(self.envs.reset(seed=list(range(self.num_envs)))[0]).to(device)
@@ -225,7 +223,13 @@ class ppo():
 					mb_inds = b_inds[index:index+self.minibatch_size]
 
 					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions.long()[mb_inds])
-					log_ratio = newlogprob - b_logprobs[mb_inds]
+
+					# clamp the new and old log probabilities
+					#newlogprob = torch.clamp(newlogprob, 1e-10, 1.0)
+					#old_log_probs = torch.clamp(b_logprobs[mb_inds], 1e-10, 1.0)
+					old_log_probs = b_logprobs[mb_inds]
+					log_ratio = newlogprob - old_log_probs 
+
 					ratio = log_ratio.exp()
 
 					# to check for early stopping. should remain below 0.2
@@ -245,6 +249,7 @@ class ppo():
 					policy_losses.append(policy_loss.item())
 
 					# value clipping
+					newvalue = newvalue.view(-1)
 					if self.clip_vloss:
 						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
 						v_clipped = b_values[mb_inds] + torch.clamp(
@@ -256,17 +261,20 @@ class ppo():
 						v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
 						value_loss = 0.5 * v_loss_max.mean()
 					else:
-						value_loss = 0.5 * (((newvalue.view(-1) - b_values[mb_inds])) ** 2).mean()
+						value_loss = 0.5 * (((newvalue - b_values[mb_inds])) ** 2).mean()
 
 					entropy_loss = entropy.mean()
 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
+
 					self.optimizer.zero_grad()
 					loss.backward()
 					nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 					self.optimizer.step()
+
 				if self.target_kl is not None:
 					if approx_kl > self.target_kl:
 						break
+
 			self.policy_old.load_state_dict(self.policy.state_dict())
 			policy_losses.append(policy_loss.item())
 
@@ -313,7 +321,7 @@ class ppo():
 		smoothed_returns = self.moving_average(episodic_returns, window_size)
 		plt.plot(x_indices, episodic_returns, label='Episodic Returns')
 		plt.plot(x_indices[9:], smoothed_returns, label=f'Moving Average (Window Size = {window_size})', color='red')
-		plt.title('Episodic Returns with Moving Average for Cartpole Problem')
+		plt.title('Episodic Returns with Moving Average for ' + self.gym_id)
 		plt.xlabel('Timestep')
 		plt.ylabel('Return')
 		plt.legend()

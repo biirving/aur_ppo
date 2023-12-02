@@ -1,0 +1,108 @@
+{
+    "os": "Linux-6.2.0-37-generic-x86_64-with-glibc2.35",
+    "python": "3.9.13",
+    "heartbeatAt": "2023-12-02T07:12:46.958519",
+    "startedAt": "2023-12-02T07:12:46.314437",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/home/benjamin/Desktop/ml/aur_ppo/src/run.py",
+    "codePathLocal": "run.py",
+    "codePath": "src/run.py",
+    "git": {
+        "remote": "https://github.com/biirving/aur_ppo.git",
+        "commit": "8be837424799004a12b15b5396983a9366680f6b"
+    },
+    "email": "slashpowben@gmail.com",
+    "root": "/home/benjamin/Desktop/ml/aur_ppo",
+    "host": "benjamin.aurelian.com",
+    "username": "benjamin",
+    "executable": "/home/benjamin/Desktop/ml/venv/bin/python",
+    "cpu_count": 6,
+    "cpu_count_logical": 12,
+    "cpu_freq": {
+        "current": 3958.2663333333335,
+        "min": 2200.0,
+        "max": 3700.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 4357.5,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4587.969,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4589.587,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4574.088,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4395.419,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4528.532,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4151.758,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4588.628,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4520.631,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4577.025,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4013.841,
+            "min": 2200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 4567.901,
+            "min": 2200.0,
+            "max": 3700.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 479.5469207763672,
+            "used": 422.01840591430664
+        }
+    },
+    "gpu": "NVIDIA GeForce RTX 3090 Ti",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 3090 Ti",
+            "memory_total": 25757220864
+        }
+    ],
+    "memory": {
+        "total": 15.490798950195312
+    }
+}

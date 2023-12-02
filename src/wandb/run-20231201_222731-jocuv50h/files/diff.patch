@@ -1,0 +1,31 @@
+diff --git a/src/actor_critic_2.pt b/src/actor_critic_2.pt
+index 81defd1..7fcabbd 100644
+Binary files a/src/actor_critic_2.pt and b/src/actor_critic_2.pt differ
+diff --git a/src/episodic lengths_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic lengths_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png
+index 7a30ed7..5d8cca8 100644
+Binary files a/src/episodic lengths_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png and b/src/episodic lengths_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png differ
+diff --git a/src/episodic returns_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png b/src/episodic returns_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png
+index 571acfa..2ec7cc5 100644
+Binary files a/src/episodic returns_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png and b/src/episodic returns_num_layers_2_dropout_0.0_num_envs_4_num_mb_4.png differ
+diff --git a/src/run.py b/src/run.py
+index 1e28cb6..e9d86bc 100644
+--- a/src/run.py
++++ b/src/run.py
+@@ -30,7 +30,7 @@ if __name__=='__main__':
+ 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
+ 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
+ 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
+-	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
++	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=1500000)
+ 	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
+ 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
+ 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
+diff --git a/src/wandb/latest-run b/src/wandb/latest-run
+index 172d2d0..2d94064 120000
+--- a/src/wandb/latest-run
++++ b/src/wandb/latest-run
+@@ -1 +1 @@
+-run-20231201_214234-ephpfqat
+\ No newline at end of file
++run-20231201_222731-jocuv50h
+\ No newline at end of file

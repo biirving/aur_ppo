@@ -26,7 +26,7 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
 
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='CartPole-v1')
+	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='MountainCar-v0')
 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
@@ -39,7 +39,7 @@ if __name__=='__main__':
 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
-	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=False)
+	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=True)
 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
 	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=0.2)
 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
