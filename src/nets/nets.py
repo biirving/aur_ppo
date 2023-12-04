@@ -15,9 +15,9 @@ class discrete_net(nn.Module):
     # at a torch datatype flag to allow changes to floating point size
     def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
         super().__init__()
-        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh(), nn.Dropout(dropout)]
+        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
         for _ in range(num_layers - 1):
-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
+            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
         layers.append(layer_init(nn.Linear(dim, output_dim), action_std))
         self.net = nn.Sequential(*layers)
     def forward(self, input:tensor) -> tensor:
@@ -26,11 +26,11 @@ class discrete_net(nn.Module):
 class continuous_net(nn.Module):
     def __init__(self, dim:int, input_dim:int, output_dim:int, num_layers:int, dropout:float, action_std=0.01) -> None:
         super().__init__()
-        layers = [layer_init(nn.Linear(input_dim, dim)), nn.Tanh(), nn.Dropout(dropout)]
+        layers = [layer_init(nn.Linear(np.array(input_dim).prod(), dim)), nn.Tanh()]
         for _ in range(num_layers - 1):
-            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh(), nn.Dropout(dropout)])
+            layers.extend([layer_init(nn.Linear(dim, dim)), nn.Tanh()])
         # use simple linear layer instead of softmax function
-        layers.append(layer_init(nn.Linear(dim, np.prod(output_dim))), action_std)
+        layers.append(layer_init(nn.Linear(dim, np.prod(output_dim)), action_std))
         self.net = nn.Sequential(*layers)
     def forward(self, input:tensor) -> tensor:
         return self.net(input)

@@ -3,6 +3,7 @@ from torch import nn, tensor
 from nets import discrete_net, continuous_net, critic
 from torch.distributions import Normal, Categorical
 import numpy as np
+import sys
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -20,12 +21,30 @@ class actor_critic(nn.Module):
 		self.continuous = continuous
 		self.num_layers = num_layers
 		self.dropout = dropout
+		# use np.prod to account for multidimensional action space dim inputs
 		if(continuous):
 			self.actor = continuous_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
+			self.critic = critic(hidden_dim, state_dim, num_layers, dropout)
+			"""
+			self.critic = nn.Sequential(
+				layer_init(nn.Linear(np.array(state_dim).prod(), 64)),
+				nn.Tanh(),
+				layer_init(nn.Linear(64, 64)),
+				nn.Tanh(),
+				layer_init(nn.Linear(64, 1), std=1.0),
+			)
+			self.actor_alt = nn.Sequential(
+				layer_init(nn.Linear(np.array(state_dim).prod(), 64)),
+				nn.Tanh(),
+				layer_init(nn.Linear(64, 64)),
+				nn.Tanh(),
+				layer_init(nn.Linear(64, np.prod(action_dim)), std=0.01),
+			)
+			"""
 			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
 		else:
 			self.actor = discrete_net(hidden_dim, state_dim, action_dim, num_layers, dropout)
-		self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
+			self.critic = critic(hidden_dim, state_dim, num_layers, dropout) 
 		
 	def forward(self):
 		pass
@@ -43,13 +62,17 @@ class actor_critic(nn.Module):
 			action_std = torch.exp(action_logstd)
 			probs = Normal(action_mean, action_std)
 			action = probs.sample()
+			log_prob = probs.log_prob(action).sum(1)
 		else:
 			#hidden = self.network(state)
 			probs = self.actor(state)
 			dist = Categorical(logits=probs)
 			action = dist.sample()
+			log_prob = dist.log_prob(action)
+		
+		value = self.critic(state)
 		# running the policy to produce values for replay buffer. Can detach.
-		return action.detach().cpu(), dist.log_prob(action).detach().cpu(), self.critic(state).detach().cpu()
+		return action, log_prob, value
 
 	def value(self, state):
 		return self.critic(state).flatten()
@@ -58,13 +81,17 @@ class actor_critic(nn.Module):
 		if(self.continuous):
 			action_mean = self.actor(state)
 			action_logstd = self.actor_logstd.expand_as(action_mean)
-			dist = Normal(action_mean, action_logstd)
-			action = dist.rsample()
+			action_std = torch.exp(action_logstd)
+			dist = Normal(action_mean, action_std)
+			if action is None:
+				action = dist.sample()
+			log_prob = dist.log_prob(action).sum(1)
+			entropy = dist.entropy().sum(1)
 		else:
 			logits = self.actor(state)
 			dist = Categorical(logits=logits)
-			if(action is None):
+			if action is None:
 				action = dist.sample()
-		#log_prob = dist.log_prob(action).	
-		entropy = dist.entropy()
-		return action, dist.log_prob(action), dist.entropy(), self.critic(state)
+			log_prob = dist.log_prob(action)
+			entropy = dist.entropy()
+		return action, log_prob, entropy, self.critic(state)

@@ -13,7 +13,14 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import random
 
+from torch.distributions import Normal, Categorical
+
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
 
 #print(device)
 class torch_buffer():
@@ -37,15 +44,10 @@ class torch_buffer():
 		b_values = self.values.reshape(-1)
 		return b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
 
-# implement their plotting strategies
-# weights and biases graphs
 
-# make an abstract algorithm class
-# to generalize to different strategies
 class ppo():
 	# add the metrics
 	def __init__(self, params):
-		# for summarization
 		# accessing through the dictionary is slower
 		self.params_dict = params
 
@@ -80,11 +82,6 @@ class ppo():
 		self.policy = actor_critic(self.state_dim[0], 
 			self.action_dim, self.hidden_dim, self.num_layers, self.dropout, self.continuous).to(device)
 
-		# just keep them separate here
-		self.policy_old = actor_critic(self.state_dim[0], 
-			self.action_dim, self.hidden_dim, self.num_layers, self.dropout, self.continuous).to(device)
-		self.policy_old.load_state_dict(self.policy.state_dict())
-
 		self.buffer = torch_buffer(self.state_dim, self.envs.single_action_space.shape, self.num_steps, self.num_envs)
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.total_returns = []
@@ -111,24 +108,24 @@ class ppo():
 	#@profile
 	def rewards_to_go(self, step, next_obs, global_step, writer):
 		with torch.no_grad():
-			#action, logprob, _, value= self.agent.get_action_and_value(next_obs)
-			action, logprob, value = self.policy_old.act(next_obs)
+			action, logprob, _, value = self.policy.evaluate(next_obs.to(device))
 			self.buffer.values[step] = value.flatten()
-			self.buffer.actions[step] = action
-			self.buffer.log_probs[step] = logprob
-			next_obs, reward, done, _, info = self.envs.step(action.cpu().numpy())
-			if('final_info' in info.keys()):
-				for item in info['final_info']:
-					if item is not None:
-						self.total_returns.append(item["episode"]["r"])
-						self.total_episode_lengths.append(item["episode"]["l"])
-						self.x_indices.append(global_step)
-						writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step=global_step)
-						writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step=global_step)
-			self.buffer.rewards[step] = torch.tensor(reward).view(-1)
-			# torch.Tensor outputs a Float tensor, while tensor.tensor infers a dtype
-			next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
-			#sys.exit()
+		self.buffer.actions[step] = action
+		self.buffer.log_probs[step] = logprob
+
+		next_obs, reward, done, _, info = self.envs.step(action.cpu().numpy())
+		self.buffer.rewards[step] = torch.tensor(reward).view(-1)
+		next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+
+		if('final_info' in info.keys()):
+			for item in info['final_info']:
+				if item is not None:
+					writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
+					writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
+					self.total_returns.append(item["episode"]["r"])
+					self.total_episode_lengths.append(item["episode"]["l"])
+					self.x_indices.append(global_step)
+					break
 		return next_obs, next_done
 
 	def run_gae(self, next_value, next_done):
@@ -167,11 +164,11 @@ class ppo():
 
 	def advantages(self, next_obs, next_done):
 		with torch.no_grad():
-			next_value = self.policy_old.value(next_obs)
+			next_value = self.policy.value(next_obs)
 			if self.gae:
 				returns, advantages = self.run_gae(next_value, next_done)
 			else:
-				returns, advantages = self.run_normal_advantage(next_value, next_done)
+				returns, advantages = self.normal_advantage(next_value, next_done)
 		return returns, advantages
 
 	#@profile
@@ -180,7 +177,7 @@ class ppo():
 			import wandb
 			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
 		writer = SummaryWriter(f"runs/{self.run_name}")
-		writer.add_text("what", "what")
+		writer.add_text("parameters/what", "what")
 		writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{str(self.params_dict[key])}|" for key in self.params_dict])),
@@ -196,7 +193,9 @@ class ppo():
 		next_obs = torch.Tensor(self.envs.reset(seed=list(range(self.num_envs)))[0]).to(device)
 		next_done = torch.zeros(self.num_envs).to(device)
 		policy_losses = []
+		#sys.exit()
 		for update in tqdm(range(1, self.num_updates + 1)):
+			t0 = time.time()
 			# adjust learning rate
 			if self.anneal_lr:
 				frac = 1.0 - (update - 1.0) / self.num_updates
@@ -209,11 +208,12 @@ class ppo():
 				self.buffer.states[step] = next_obs
 				self.buffer.terminals[step] = next_done
 				next_obs, next_done = self.rewards_to_go(step, next_obs, global_step, writer)	
-
+								
 			returns, advantages = self.advantages(next_obs, next_done)
 
 			(b_obs, b_logprobs, b_actions, 
 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
+
 			b_inds = np.arange(self.batch_size)
 			clip_fracs = []
 			for ep in range(self.num_update_epochs):
@@ -221,8 +221,7 @@ class ppo():
 				np.random.shuffle(b_inds)
 				for index in range(0, self.batch_size, self.minibatch_size):
 					mb_inds = b_inds[index:index+self.minibatch_size]
-
-					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions.long()[mb_inds])
+					_, newlogprob, entropy, newvalue = self.policy.evaluate(b_obs[mb_inds], b_actions[mb_inds])
 
 					# clamp the new and old log probabilities
 					#newlogprob = torch.clamp(newlogprob, 1e-10, 1.0)
@@ -233,7 +232,7 @@ class ppo():
 					ratio = log_ratio.exp()
 
 					# to check for early stopping. should remain below 0.2
-					with torch.no_grad():
+					with torch.no_grad():	
 						old_approx_kl = (-log_ratio).mean()
 						approx_kl = ((ratio - 1) - log_ratio).mean()
 						clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
@@ -261,7 +260,7 @@ class ppo():
 						v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
 						value_loss = 0.5 * v_loss_max.mean()
 					else:
-						value_loss = 0.5 * (((newvalue - b_values[mb_inds])) ** 2).mean()
+						value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
 
 					entropy_loss = entropy.mean()
 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
@@ -270,12 +269,10 @@ class ppo():
 					loss.backward()
 					nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 					self.optimizer.step()
-
 				if self.target_kl is not None:
 					if approx_kl > self.target_kl:
 						break
 
-			self.policy_old.load_state_dict(self.policy.state_dict())
 			policy_losses.append(policy_loss.item())
 
 			y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
@@ -302,7 +299,6 @@ class ppo():
 		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
 
 		return self.total_returns, self.total_episode_lengths, self.x_indices
-
 		#self.plot_episodic_returns(np.array(policy_losses), np.arange(len(policy_losses)))
 
 	def plot(self, loss, x_indices):

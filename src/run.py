@@ -26,7 +26,7 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
 
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='MountainCar-v0')
+	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='CartPole-v1')
 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
@@ -41,7 +41,7 @@ if __name__=='__main__':
 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
 	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=True)
 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
-	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=0.2)
+	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
 	parser.add_argument('-p', '--capture_video', type=bool, help='Whether to capture the video or not', default=False)
 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
@@ -51,9 +51,19 @@ if __name__=='__main__':
 	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
-	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=True)
+	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
 	args = parser.parse_args()
+
+	# using mujoco parameters from open ai baselines
+	if(args.continuous):
+		args.learning_rate = 3e-4
+		args.num_envs = 1
+		args.total_timesteps = 2000000
+		args.num_steps = 2048 
+		args.num_minibatches = 32
+		args.num_update_epochs = 10
+		args.entropy_coeff = 0
 
 	params = {
 		'gym_id':args.gym_id,
