@@ -17,12 +17,6 @@ from torch.distributions import Normal, Categorical
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-#print(device)
 class torch_buffer():
 	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
 		self.observation_shape = observation_shape
@@ -182,6 +176,7 @@ class ppo():
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{str(self.params_dict[key])}|" for key in self.params_dict])),
     	)
+
 		seed = 1
 		random.seed(seed)
 		np.random.seed(seed)
@@ -269,6 +264,7 @@ class ppo():
 					loss.backward()
 					nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 					self.optimizer.step()
+
 				if self.target_kl is not None:
 					if approx_kl > self.target_kl:
 						break

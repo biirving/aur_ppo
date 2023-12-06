@@ -1,8 +1,9 @@
 import sys
 sys.path.append('..')
-sys.path.append('/work/nlp/b.irving/equi_rl/helping_hands_rl_envs')
+sys.path.append('/home/benjamin/Desktop/ml/BulletArm/bulletarm')
 import torch
-from helping_hands_rl_envs import env_factory
+from bulletarm import env_factory
+
 class EnvWrapper:
     def __init__(self, num_processes, simulator, env, env_config, planner_config):
         self.envs = env_factory.createEnvs(num_processes, env, env_config, planner_config)
