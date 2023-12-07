@@ -1,0 +1,400 @@
+diff --git a/src/models/robot_actor_critic.py b/src/models/robot_actor_critic.py
+index deebd93..0254570 100644
+--- a/src/models/robot_actor_critic.py
++++ b/src/models/robot_actor_critic.py
+@@ -1,6 +1,8 @@
+ import torch
+ from torch import nn, tensor
+ from nets.equiv import EquivariantActor, EquivariantCritic
++from nets.base_cnns import base_actor, base_critic
++
+ from torch.distributions import Normal, Categorical
+ import numpy as np
+ import sys
+@@ -23,13 +25,18 @@ class robot_actor_critic(nn.Module):
+ 		if(equivariant):
+ 			self.actor = EquivariantActor().to(device)
+ 			self.critic = EquivariantCritic().to(device)
+-			#self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
++		else:
++			self.actor = base_actor()
++			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(5)))
++			self.critic = base_critic() 
+ 		
+ 	def forward(self, act):
+ 		pass
+ 
+-	def value(self, state):
+-		return self.critic(state)
++	def value(self, state, obs):
++		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
++		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
++		return self.critic(cat_obs)
+ 
+ 	# courtesy of Dian Wang
+ 	def decodeActions(self, *args):
+@@ -74,15 +81,19 @@ class robot_actor_critic(nn.Module):
+ 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
+ 
+ 	def evaluate(self, state, obs, action=None):
+-		# support batching
+ 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+ 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+-		action_mean, action_logstd = self.actor(cat_obs)
++		if(self.equivariant):
++			action_mean, action_logstd = self.actor(cat_obs)
++		else:
++			action_mean = self.actor(cat_obs)
++			action_logstd = self.actor_logstd.expand_as(action_mean)
+ 		action_std = torch.exp(action_logstd)
+ 		dist = Normal(action_mean, action_std)
++		# control flow is bad
+ 		if action is None:
+-			action = dist.sample()
++			action = dist.rsample()
+ 		log_prob = dist.log_prob(action)
+ 		entropy = dist.entropy()
+ 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
+-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(obs)
++		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
+diff --git a/src/nets/__init__.py b/src/nets/__init__.py
+index c43fec0..48d78c6 100644
+--- a/src/nets/__init__.py
++++ b/src/nets/__init__.py
+@@ -1,2 +1,3 @@
+ from .nets import discrete_net, continuous_net, critic
+-from .equiv import EquivariantActor, EquivariantCritic
+\ No newline at end of file
++from .equiv import EquivariantActor, EquivariantCritic
++from .base_cnns import base_actor, base_critic
+\ No newline at end of file
+diff --git a/src/nets/equiv.py b/src/nets/equiv.py
+index 2778142..f27eb03 100644
+--- a/src/nets/equiv.py
++++ b/src/nets/equiv.py
+@@ -88,7 +88,7 @@ class EquivariantActor(torch.nn.Module):
+ 
+ 
+ class EquivariantCritic(torch.nn.Module):
+-    def __init__(self, obs_shape=(1, 128, 128), n_hidden=128, initialize=True, N=4):
++    def __init__(self, obs_shape=(2, 128, 128), n_hidden=128, initialize=True, N=4):
+         super().__init__()
+         self.obs_channel = obs_shape[0]
+         self.n_hidden = n_hidden
+@@ -117,4 +117,7 @@ class EquivariantCritic(torch.nn.Module):
+         obs_geo = nn.GeometricTensor(obs, nn.FieldType(self.c4_act, self.obs_channel*[self.c4_act.trivial_repr]))
+         conv_out = self.img_conv(obs_geo)
+         out = self.critic(conv_out)
+-        return out 
+\ No newline at end of file
++        return out 
++
++
++    
+\ No newline at end of file
+diff --git a/src/robot_env.py b/src/robot_env.py
+deleted file mode 100644
+index df9172b..0000000
+--- a/src/robot_env.py
++++ /dev/null
+@@ -1,20 +0,0 @@
+-from env_wrapper import EnvWrapper
+-import numpy as np
+-
+-num_processes=10
+-num_eval_processes=5
+-simulator='pybullet'
+-env='close_loop_block_pulling'
+-env_config={'workspace': np.array([[ 0.25,  0.65],
+-       [-0.2 ,  0.2 ],
+-       [ 0.01,  0.25]]), 'max_steps': 100, 'obs_size': 128, 'fast_mode': True, 'action_sequence': 'pxyzr', 'render': False, 'num_objects': 2, 'random_orientation': True, 'robot': 'kuka', 'workspace_check': 'point', 'object_scale_range': (1, 1), 'hard_reset_freq': 1000, 'physics_mode': 'fast', 'view_type': 'camera_center_xyz', 'obs_type': 'pixel', 'view_scale': 1.5, 'transparent_bin': True}
+-planner_config={'random_orientation': True, 'dpos': 0.02, 'drot': 0.19634954084936207}
+-envs = EnvWrapper(num_processes, simulator, env, env_config, planner_config)
+-
+-state, obs = envs.reset()
+-print(state)
+-act = envs.getNextAction()
+-eval_envs = EnvWrapper(num_eval_processes, simulator, env, env_config, planner_config)
+-what, what_2, what_3, what_4 = envs.step(act)
+-print(what)
+-print(what_3)
+diff --git a/src/robot_ppo.py b/src/robot_ppo.py
+index 9c9f9b1..0066a42 100644
+--- a/src/robot_ppo.py
++++ b/src/robot_ppo.py
+@@ -116,13 +116,10 @@ class robot_ppo():
+ 		
+ 		self.policy = robot_actor_critic(device, self.equivariant).to(device)
+ 
+-		# for close loop block pulling
+ 		self.action_dim = 5
+ 		self.state_dim = 1 
+-		# working with 128 x 128 images
+ 		self.buffer = torch_buffer(self.state_dim, (1, 128, 128), self.action_dim, self.num_steps, self.num_envs)
+ 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
+-		# We use some imitation learning on the actors parameters
+ 		self.pretrain_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.learning_rate, eps=1e-5)
+ 		self.total_returns = []
+ 		self.total_episode_lengths = []
+@@ -131,9 +128,11 @@ class robot_ppo():
+ 
+ 	def rewards_to_go(self, step, next_state, next_obs, global_step, writer):
+ 		with torch.no_grad():
+-			# will just be exploring randomly, without any pretraining/augmentation
+ 			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
+-			self.buffer.values[step] = value.tensor.flatten()
++			if(self.equivariant):
++				self.buffer.values[step] = value.tensor.flatten()
++			else:
++				self.buffer.values[step] = value.flatten()
+ 		self.buffer.actions[step] = actions
+ 		self.buffer.log_probs[step] = logprob
+ 
+@@ -142,20 +141,16 @@ class robot_ppo():
+ 		for i, rew in enumerate(reward):
+ 			self.episodic_returns.add_value(i, rew)
+ 
+-		self.buffer.rewards[step] = torch.tensor(reward).view(-1)
+-		next_states, next_obs, next_done = torch.tensor(next_states), torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
++		self.buffer.rewards[step] = reward.view(-1)
++		next_states, next_obs, next_done = next_states, next_obs.to(device), done.to(device)
+ 
+-		# get reward of the local episode
+-		# we have to 'book keep' at each step
+ 		for i, d in enumerate(done):
+ 			if d:
+ 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
+-				# then we get the discounted episodic return for env 'i'
+-				writer.add_scalar("charts/discounted_episodic_return", discounted_return, self.plot_index)
+-				writer.add_scalar("charts/episodic_length", episode_length, self.plot_index)
++				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
++				writer.add_scalar("charts/episodic_length", episode_length, global_step)
+ 				self.plot_index += 1
+ 				break
+-				#how do we deal with multiple episodes ending on the same global step?
+ 
+ 		return next_states, next_obs, next_done
+ 
+@@ -193,9 +188,12 @@ class robot_ppo():
+ 		advantages = returns - self.buffer.values
+ 		return returns, advantages
+ 
+-	def advantages(self, next_obs, next_done):
++	def advantages(self, next_state, next_obs, next_done):
+ 		with torch.no_grad():
+-			next_value = self.policy.value(next_obs).tensor.flatten()
++			if(self.equivariant):
++				next_value = self.policy.value(next_state, next_obs).tensor.flatten()
++			else:
++				next_value = self.policy.value(next_state, next_obs).flatten()
+ 			if self.gae:
+ 				returns, advantages = self.run_gae(next_value, next_done)
+ 			else:
+@@ -208,29 +206,44 @@ class robot_ppo():
+ 		#obs = obs.to(torch.uint8)
+ 		return obs
+ 
+-	#simple imitation learning pretraining of our agent
+-	# is this completely wrong
++	# simple imitation learning pretraining of our agent, using mean squared error
+ 	def pretrain(self):
+ 		loss_fct = torch.nn.MSELoss()
+ 		state, obs = self.envs.reset()
+-		# we want to pretrain our policy... use simple MSE loss
+-		# using the distributed environment?
+ 		index = 0
+ 		p = 0
++		# there is a reason why they are stored in tuples
++		agent_actions = []
++		env_actions = []
++		# we actually aren't stepping by a constant amount, because we are not using
++		# the 'true' action to step the environment
+ 		while p < self.pretrain_episodes:
+ 			obs = self.normalizeTransition(obs)
+ 			# the ground truth action for our environments
++			# This function pulls the 'optimal' action
+ 			true_actions = self.envs.getNextAction()
+-			_, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
+-			agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
+-			state, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
+-			agent_action.requires_grad_(True)
+-			loss = loss_fct(agent_action.to(device), scaled_true_actions.to(device))
++			unscaled_actions, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
++			# want to add these as individual tensors, that can be shuffled around and broken down
++			#for chunk in torch.chunk(unscaled_actions, self.action_dim, dim=0):
++			#	agent_actions.append(chunk)
++			agent_actions.append(unscaled_actions)
++			env_actions.append(true_actions)
++			#agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
++			_, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
++			index+=1
++			p += done.sum()
++
++		agent_actions = torch.cat(agent_actions, dim = 0)
++		env_actions = torch.cat(env_actions, dim = 0)	
++		# shuffle the actions around
++		indices = torch.randperm(agent_actions.shape[0])
++		agent_actions = agent_actions[indices]
++		env_actions = env_actions[indices]
++		for ind in range(0,  len(agent_actions), self.pretrain_batch_size):
++			loss = loss_fct(agent_actions[ind:ind+self.pretrain_batch_size].requires_grad_(True).to(device), env_actions[ind:ind+self.pretrain_batch_size].to(device))
+ 			self.pretrain_optimizer.zero_grad()
+ 			loss.backward()
+ 			self.pretrain_optimizer.step()
+-			index += 1 
+-			p += done.sum()
+ 
+ 	#@profile
+ 	def train(self):
+@@ -258,6 +271,8 @@ class robot_ppo():
+ 
+ 		# pretrain...some immitation learning to get us started
+ 		self.pretrain()
++
++
+ 		for update in tqdm(range(1, self.num_updates + 1)):
+ 			t0 = time.time()
+ 			# adjust learning rate
+@@ -266,8 +281,6 @@ class robot_ppo():
+ 				lrnow = frac * self.learning_rate
+ 				self.optimizer.param_groups[0]["lr"] = lrnow
+ 
+-			# generate rewards to go for environment before update 
+-			# They use 20 planner episodes? (Not in steps, but in eps.)
+ 			for step in range(0, self.num_steps):
+ 				global_step += 1 * self.num_envs
+ 				self.buffer.states[step] = next_state
+@@ -276,7 +289,7 @@ class robot_ppo():
+ 				self.buffer.terminals[step] = next_done
+ 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
+ 								
+-			returns, advantages = self.advantages(next_obs, next_done)
++			returns, advantages = self.advantages(next_state.to(device), next_obs.to(device), next_done)
+ 
+ 			(b_states, b_obs, b_logprobs, b_actions, 
+ 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
+@@ -284,24 +297,22 @@ class robot_ppo():
+ 			b_inds = np.arange(self.batch_size)
+ 			clip_fracs = []
+ 			for ep in range(self.num_update_epochs):
+-				# we randomize before processing the minibatches
+ 				np.random.shuffle(b_inds)
+ 				for index in range(0, self.batch_size, self.minibatch_size):
+ 					mb_inds = b_inds[index:index+self.minibatch_size]
+ 					
+ 					_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
+ 
+-					# clamp the new and old log probabilities
+ 					old_log_probs = b_logprobs[mb_inds]
+ 					log_ratio = newlogprob - old_log_probs 
+ 
+ 					ratio = log_ratio.exp()
+ 
+-					# to check for early stopping. should remain below 0.2
+ 					with torch.no_grad():	
+ 						old_approx_kl = (-log_ratio).mean()
+ 						approx_kl = ((ratio - 1) - log_ratio).mean()
+ 						clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
++
+ 					# we normalize at the minibatch level
+ 					mb_advantages = b_advantages[mb_inds]
+ 					# 1e-8 avoids division by 0
+@@ -314,7 +325,10 @@ class robot_ppo():
+ 					policy_losses.append(policy_loss.item())
+ 
+ 					# value clipping
+-					newvalue = newvalue.tensor.view(-1)
++					if(self.equivariant):
++						newvalue = newvalue.tensor.view(-1)
++					else:
++						newvalue = newvalue.view(-1)
+ 					if self.clip_vloss:
+ 						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+ 						v_clipped = b_values[mb_inds] + torch.clamp(
+@@ -361,7 +375,11 @@ class robot_ppo():
+ 
+ 		self.envs.close()
+ 		writer.close()
+-		torch.save(self.policy, 'actor_critic_' + str(self.num_layers) + '.pt')
++		# save the dictionary states
++		save_state = {'actor_state':self.policy.actor.load_state_dict(),
++				'critic_state':self.policy.critic.load_state_dict(), 
++				'optimizer_state':self.optimizer.load_state_dict()}
++		torch.save(save_state, 'actor_critic_' + str(self.num_layers) + '.pt')
+ 		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
+ 		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
+ 
+diff --git a/src/robot_run.py b/src/robot_run.py
+index b483626..090087a 100644
+--- a/src/robot_run.py
++++ b/src/robot_run.py
+@@ -47,13 +47,13 @@ if __name__=='__main__':
+ 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
+ 	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=True)
+ 	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2.5e-4)
+-	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='CartPole PPO')
++	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='close_loop_block_pulling')
+ 	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
+ 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
+ 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
+ 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
+ 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
+-	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=True)
++	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=False)
+ 	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
+ 	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
+ 	args = parser.parse_args()
+diff --git a/src/run.py b/src/run.py
+index 5187e5c..528087a 100644
+--- a/src/run.py
++++ b/src/run.py
+@@ -1,9 +1,11 @@
+ #!/usr/bin/env python
+ import torch
+ from ppo import ppo
++from robot_ppo import robot_ppo
+ import os, sys, argparse, time
+ import matplotlib.pyplot as plt
+ import numpy as np
++from distutils.util import strtobool
+ 
+ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title):
+ 	plt.clf()
+@@ -24,14 +26,17 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
+ 	plt.savefig('total_returns.png')
+ 	#plt.show()
+ 
++# should be a general function
++# have to clean everything up, once I have it fuckin working
+ if __name__=='__main__':
+ 	parser = argparse.ArgumentParser()
+ 	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='HalfCheetah-v4')
++	parser.add_argument('-rb', '--robot', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=False)
+ 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
+ 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
+-	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
++	parser.add_argument('-gae', '--gae', type=lambda x: bool(strtobool(x)), help='Generalized Advantage Estimation flag', default=True, nargs='?', const=True)
+ 	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
+-	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
++	parser.add_argument('-al', '--anneal_lr', type=lambda x: bool(strtobool(x)), help='How to anneal our learning rate', default=True, const=True)
+ 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
+ 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
+ 	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
+@@ -39,7 +44,7 @@ if __name__=='__main__':
+ 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
+ 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
+ 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
+-	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=True)
++	parser.add_argument('-cvl', '--clip_vloss', type=lambda x: bool(strtobool(x)), help="Clip the value loss", default=True. nargs='?', const=True)
+ 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
+ 	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
+ 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
+diff --git a/src/wandb/latest-run b/src/wandb/latest-run
+index 09416ac..71131f5 120000
+--- a/src/wandb/latest-run
++++ b/src/wandb/latest-run
+@@ -1 +1 @@
+-run-20231206_015919-tc7tc7hh
+\ No newline at end of file
++run-20231207_161829-6mpy2cuf
+\ No newline at end of file

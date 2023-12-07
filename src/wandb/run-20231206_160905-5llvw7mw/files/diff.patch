@@ -1,0 +1,22 @@
+diff --git a/src/robot_run.py b/src/robot_run.py
+index b483626..02117ec 100644
+--- a/src/robot_run.py
++++ b/src/robot_run.py
+@@ -54,7 +54,7 @@ if __name__=='__main__':
+ 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
+ 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
+ 	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=True)
+-	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
++	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=1000)
+ 	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
+ 	args = parser.parse_args()
+ 
+diff --git a/src/wandb/latest-run b/src/wandb/latest-run
+index 09416ac..9b10c35 120000
+--- a/src/wandb/latest-run
++++ b/src/wandb/latest-run
+@@ -1 +1 @@
+-run-20231206_015919-tc7tc7hh
+\ No newline at end of file
++run-20231206_160905-5llvw7mw
+\ No newline at end of file

@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 import torch
 from ppo import ppo
+from robot_ppo import robot_ppo
 import os, sys, argparse, time
 import matplotlib.pyplot as plt
 import numpy as np
+from distutils.util import strtobool
 
 def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title):
 	plt.clf()
@@ -24,14 +26,17 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
 	plt.savefig('total_returns.png')
 	#plt.show()
 
+# should be a general function
+# have to clean everything up, once I have it fuckin working
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='HalfCheetah-v4')
+	parser.add_argument('-rb', '--robot', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=False)
 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
-	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
+	parser.add_argument('-gae', '--gae', type=lambda x: bool(strtobool(x)), help='Generalized Advantage Estimation flag', default=True, nargs='?', const=True)
 	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
-	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
+	parser.add_argument('-al', '--anneal_lr', type=lambda x: bool(strtobool(x)), help='How to anneal our learning rate', default=True, const=True)
 	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
 	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
 	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=4)
@@ -39,7 +44,7 @@ if __name__=='__main__':
 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
 	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
-	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=True)
+	parser.add_argument('-cvl', '--clip_vloss', type=lambda x: bool(strtobool(x)), help="Clip the value loss", default=True. nargs='?', const=True)
 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
 	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)

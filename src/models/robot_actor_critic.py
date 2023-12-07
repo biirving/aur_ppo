@@ -1,6 +1,8 @@
 import torch
 from torch import nn, tensor
 from nets.equiv import EquivariantActor, EquivariantCritic
+from nets.base_cnns import base_actor, base_critic
+
 from torch.distributions import Normal, Categorical
 import numpy as np
 import sys
@@ -23,13 +25,18 @@ class robot_actor_critic(nn.Module):
 		if(equivariant):
 			self.actor = EquivariantActor().to(device)
 			self.critic = EquivariantCritic().to(device)
-			#self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_dim)))
+		else:
+			self.actor = base_actor()
+			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(5)))
+			self.critic = base_critic() 
 		
 	def forward(self, act):
 		pass
 
-	def value(self, state):
-		return self.critic(state)
+	def value(self, state, obs):
+		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+		return self.critic(cat_obs)
 
 	# courtesy of Dian Wang
 	def decodeActions(self, *args):
@@ -74,15 +81,20 @@ class robot_actor_critic(nn.Module):
 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
 
 	def evaluate(self, state, obs, action=None):
-		# support batching
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		action_mean, action_logstd = self.actor(cat_obs)
+
+		if(self.equivariant):
+			action_mean, action_logstd = self.actor(cat_obs)
+		else:
+			action_mean = self.actor(cat_obs)
+			action_logstd = self.actor_logstd.expand_as(action_mean)
 		action_std = torch.exp(action_logstd)
 		dist = Normal(action_mean, action_std)
+		# control flow is bad
 		if action is None:
-			action = dist.sample()
+			action = dist.rsample()
 		log_prob = dist.log_prob(action)
 		entropy = dist.entropy()
 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(obs)
+		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)

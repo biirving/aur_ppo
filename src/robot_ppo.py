@@ -116,13 +116,10 @@ class robot_ppo():
 		
 		self.policy = robot_actor_critic(device, self.equivariant).to(device)
 
-		# for close loop block pulling
 		self.action_dim = 5
 		self.state_dim = 1 
-		# working with 128 x 128 images
 		self.buffer = torch_buffer(self.state_dim, (1, 128, 128), self.action_dim, self.num_steps, self.num_envs)
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
-		# We use some imitation learning on the actors parameters
 		self.pretrain_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.total_returns = []
 		self.total_episode_lengths = []
@@ -131,9 +128,11 @@ class robot_ppo():
 
 	def rewards_to_go(self, step, next_state, next_obs, global_step, writer):
 		with torch.no_grad():
-			# will just be exploring randomly, without any pretraining/augmentation
 			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
-			self.buffer.values[step] = value.tensor.flatten()
+			if(self.equivariant):
+				self.buffer.values[step] = value.tensor.flatten()
+			else:
+				self.buffer.values[step] = value.flatten()
 		self.buffer.actions[step] = actions
 		self.buffer.log_probs[step] = logprob
 
@@ -142,20 +141,16 @@ class robot_ppo():
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
 
-		self.buffer.rewards[step] = torch.tensor(reward).view(-1)
-		next_states, next_obs, next_done = torch.tensor(next_states), torch.Tensor(next_obs).to(device), torch.Tensor(done).to(device)
+		self.buffer.rewards[step] = reward.view(-1)
+		next_states, next_obs, next_done = next_states, next_obs.to(device), done.to(device)
 
-		# get reward of the local episode
-		# we have to 'book keep' at each step
 		for i, d in enumerate(done):
 			if d:
 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
-				# then we get the discounted episodic return for env 'i'
-				writer.add_scalar("charts/discounted_episodic_return", discounted_return, self.plot_index)
-				writer.add_scalar("charts/episodic_length", episode_length, self.plot_index)
+				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
+				writer.add_scalar("charts/episodic_length", episode_length, global_step)
 				self.plot_index += 1
 				break
-				#how do we deal with multiple episodes ending on the same global step?
 
 		return next_states, next_obs, next_done
 
@@ -193,9 +188,12 @@ class robot_ppo():
 		advantages = returns - self.buffer.values
 		return returns, advantages
 
-	def advantages(self, next_obs, next_done):
+	def advantages(self, next_state, next_obs, next_done):
 		with torch.no_grad():
-			next_value = self.policy.value(next_obs).tensor.flatten()
+			if(self.equivariant):
+				next_value = self.policy.value(next_state, next_obs).tensor.flatten()
+			else:
+				next_value = self.policy.value(next_state, next_obs).flatten()
 			if self.gae:
 				returns, advantages = self.run_gae(next_value, next_done)
 			else:
@@ -208,29 +206,36 @@ class robot_ppo():
 		#obs = obs.to(torch.uint8)
 		return obs
 
-	#simple imitation learning pretraining of our agent
-	# is this completely wrong
+	# simple imitation learning pretraining of our agent, using mean squared error
 	def pretrain(self):
 		loss_fct = torch.nn.MSELoss()
 		state, obs = self.envs.reset()
-		# we want to pretrain our policy... use simple MSE loss
-		# using the distributed environment?
 		index = 0
 		p = 0
+		agent_actions = []
+		env_actions = []
 		while p < self.pretrain_episodes:
 			obs = self.normalizeTransition(obs)
-			# the ground truth action for our environments
 			true_actions = self.envs.getNextAction()
-			_, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
-			agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
-			state, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
-			agent_action.requires_grad_(True)
-			loss = loss_fct(agent_action.to(device), scaled_true_actions.to(device))
+			unscaled_actions, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
+			agent_actions.append(unscaled_actions)
+			env_actions.append(true_actions)
+			#agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
+			_, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
+			index+=1
+			p += done.sum()
+
+		agent_actions = torch.cat(agent_actions, dim = 0)
+		env_actions = torch.cat(env_actions, dim = 0)	
+		# shuffle the actions around
+		indices = torch.randperm(agent_actions.shape[0])
+		agent_actions = agent_actions[indices]
+		env_actions = env_actions[indices]
+		for ind in range(0,  len(agent_actions), self.pretrain_batch_size):
+			loss = loss_fct(agent_actions[ind:ind+self.pretrain_batch_size].requires_grad_(True).to(device), env_actions[ind:ind+self.pretrain_batch_size].to(device))
 			self.pretrain_optimizer.zero_grad()
 			loss.backward()
 			self.pretrain_optimizer.step()
-			index += 1 
-			p += done.sum()
 
 	#@profile
 	def train(self):
@@ -258,6 +263,8 @@ class robot_ppo():
 
 		# pretrain...some immitation learning to get us started
 		self.pretrain()
+
+
 		for update in tqdm(range(1, self.num_updates + 1)):
 			t0 = time.time()
 			# adjust learning rate
@@ -266,8 +273,6 @@ class robot_ppo():
 				lrnow = frac * self.learning_rate
 				self.optimizer.param_groups[0]["lr"] = lrnow
 
-			# generate rewards to go for environment before update 
-			# They use 20 planner episodes? (Not in steps, but in eps.)
 			for step in range(0, self.num_steps):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_state
@@ -276,7 +281,7 @@ class robot_ppo():
 				self.buffer.terminals[step] = next_done
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
 								
-			returns, advantages = self.advantages(next_obs, next_done)
+			returns, advantages = self.advantages(next_state.to(device), next_obs.to(device), next_done)
 
 			(b_states, b_obs, b_logprobs, b_actions, 
 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
@@ -284,24 +289,22 @@ class robot_ppo():
 			b_inds = np.arange(self.batch_size)
 			clip_fracs = []
 			for ep in range(self.num_update_epochs):
-				# we randomize before processing the minibatches
 				np.random.shuffle(b_inds)
 				for index in range(0, self.batch_size, self.minibatch_size):
 					mb_inds = b_inds[index:index+self.minibatch_size]
 					
 					_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
 
-					# clamp the new and old log probabilities
 					old_log_probs = b_logprobs[mb_inds]
 					log_ratio = newlogprob - old_log_probs 
 
 					ratio = log_ratio.exp()
 
-					# to check for early stopping. should remain below 0.2
 					with torch.no_grad():	
 						old_approx_kl = (-log_ratio).mean()
 						approx_kl = ((ratio - 1) - log_ratio).mean()
 						clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
+
 					# we normalize at the minibatch level
 					mb_advantages = b_advantages[mb_inds]
 					# 1e-8 avoids division by 0
@@ -314,7 +317,10 @@ class robot_ppo():
 					policy_losses.append(policy_loss.item())
 
 					# value clipping
-					newvalue = newvalue.tensor.view(-1)
+					if(self.equivariant):
+						newvalue = newvalue.tensor.view(-1)
+					else:
+						newvalue = newvalue.view(-1)
 					if self.clip_vloss:
 						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
 						v_clipped = b_values[mb_inds] + torch.clamp(
@@ -361,7 +367,11 @@ class robot_ppo():
 
 		self.envs.close()
 		writer.close()
-		torch.save(self.policy, 'actor_critic_' + str(self.num_layers) + '.pt')
+		# save the dictionary states
+		save_state = {'actor_state':self.policy.actor.state_dict(),
+				'critic_state':self.policy.critic.state_dict(), 
+				'optimizer_state':self.optimizer.state_dict()}
+		torch.save(save_state, 'actor_critic_' + str(self.num_layers) + '.pt')
 		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
 		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
 

@@ -1,6 +1,9 @@
 from env_wrapper import EnvWrapper
+import torch
 import numpy as np
+from nets.base_cnns import base_critic, base_actor
 
+"""
 num_processes=10
 num_eval_processes=5
 simulator='pybullet'
@@ -16,5 +19,9 @@ print(state)
 act = envs.getNextAction()
 eval_envs = EnvWrapper(num_eval_processes, simulator, env, env_config, planner_config)
 what, what_2, what_3, what_4 = envs.step(act)
-print(what)
-print(what_3)
+"""
+yuh = base_critic()
+sample = torch.randn(5, 2, 128, 128)
+huh = base_actor()
+#print(base_critic(sample))
+print(yuh(sample))
