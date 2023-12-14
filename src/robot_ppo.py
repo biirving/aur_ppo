@@ -120,6 +120,8 @@ class robot_ppo():
 		self.action_dim = 5
 		self.state_dim = 1 
 		self.buffer = torch_buffer(self.state_dim, (1, 128, 128), self.action_dim, self.num_steps, self.num_envs)
+		# Have a set number of pretrain steps
+		self.pretrain_buffer = torch_buffer(self.state_dim, (1, 128, 128), self.action_dim, self.num_steps, self.num_envs)
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.pretrain_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.total_returns = []
