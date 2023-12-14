@@ -52,7 +52,7 @@ class base_encoder(nn.Module):
 
 # similar amount of parameters
 class base_critic(nn.Module):
-    def __init__(self, obs_shape=(2, 128, 128)):
+    def __init__(self, obs_shape=(1, 128, 128)):
         super().__init__()
         self.conv = base_encoder(obs_shape=obs_shape, out_dim=128)
         self.critic = torch.nn.Sequential(

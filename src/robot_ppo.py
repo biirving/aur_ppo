@@ -16,6 +16,7 @@ from env_wrapper import EnvWrapper
 from torch.distributions import Normal, Categorical
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+#device = torch.device('cpu')
 
 class torch_buffer():
 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
@@ -29,6 +30,7 @@ class torch_buffer():
 		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
 		self.terminals = torch.zeros((num_steps, num_envs)).to(device)
 		self.values = torch.zeros((num_steps, num_envs)).to(device)
+		self.true_actions = torch.zeros((num_steps, num_envs, action_shape)).to(device)
 
 	# flatten the buffer values for evaluation
 	def flatten(self, returns, advantages):
@@ -37,10 +39,11 @@ class torch_buffer():
 								 self.observations.shape[2], self.observations.shape[3], self.observations.shape[4])
 		b_logprobs = self.log_probs.reshape(-1)
 		b_actions = self.actions.view(self.actions.shape[0] * self.actions.shape[1], self.actions.shape[2])
+		b_true_actions = self.true_actions.view(self.true_actions.shape[0] * self.true_actions.shape[1], self.true_actions.shape[2])
 		b_advantages = advantages.reshape(-1)
 		b_returns = returns.reshape(-1)
 		b_values = self.values.reshape(-1)
-		return b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
+		return b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values, b_true_actions
 
 # simple class for plotting in this environment
 class store_returns():
@@ -58,8 +61,6 @@ class store_returns():
 			R = r + self.gamma * R
 		self.env_returns[i] = []
 		return R, len_episode
-
-
 
 class robot_ppo():
 	# add the metrics
@@ -80,7 +81,7 @@ class robot_ppo():
 
 		# Tht total steps x the number of envs represents how many total
 		# steps in the said environment will be taken by the training loop		
-		self.all_steps = self.num_steps * self.num_envs
+		self.all_steps = self.num_steps * self.num_envs 
 		self.batch_size = int(self.num_envs * self.num_steps)
 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
 		self.num_updates = self.total_timesteps // self.batch_size
@@ -92,7 +93,7 @@ class robot_ppo():
 		# config used in Dian, Rob, and Robin's paper
 		env_config={'workspace': np.array([[ 0.25,  0.65],
 			[-0.2 ,  0.2 ],
-			[ 0.01,  0.25]]), 'max_steps': 100, 
+			[ 0.01,  0.25]]), 'max_steps': 250, 
 			'obs_size': 128, 
 			'fast_mode': True, 
 			'action_sequence': 'pxyzr', 
@@ -127,14 +128,17 @@ class robot_ppo():
 		self.episodic_returns = store_returns(self.num_envs, self.gamma)
 
 	def rewards_to_go(self, step, next_state, next_obs, global_step, writer):
+		#next_obs = self.normalizeTransition(next_obs)
 		with torch.no_grad():
 			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
 			if(self.equivariant):
 				self.buffer.values[step] = value.tensor.flatten()
 			else:
 				self.buffer.values[step] = value.flatten()
-		self.buffer.actions[step] = actions
+		self.buffer.actions[step] = unscaled 
 		self.buffer.log_probs[step] = logprob
+
+		#self.buffer.true_actions[step] = true_actions
 
 		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
 
@@ -142,16 +146,36 @@ class robot_ppo():
 			self.episodic_returns.add_value(i, rew)
 
 		self.buffer.rewards[step] = reward.view(-1)
-		next_states, next_obs, next_done = next_states, next_obs.to(device), done.to(device)
+		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 
 		for i, d in enumerate(done):
 			if d:
 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
-				self.plot_index += 1
 				break
+				
 
+		return next_states, next_obs, next_done
+
+	def expert_rollout(self, step, next_state, next_obs, global_step, writer):
+		#next_obs = self.normalizeTransition(next_obs)
+		with torch.no_grad():
+			true_action = self.envs.getNextAction()
+			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
+			if(self.equivariant):
+				self.buffer.values[step] = value.tensor.flatten()
+			else:
+				self.buffer.values[step] = value.flatten()
+
+		self.buffer.actions[step] = actions
+		self.buffer.log_probs[step] = logprob
+		# get actions from getActionsFromPlan
+		next_states, next_obs, reward, done = self.envs.step(true_action, auto_reset=True)
+		for i, rew in enumerate(reward):
+			self.episodic_returns.add_value(i, rew)
+		self.buffer.rewards[step] = reward.view(-1)
+		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		return next_states, next_obs, next_done
 
 	def run_gae(self, next_value, next_done):
@@ -204,35 +228,39 @@ class robot_ppo():
 		#obs = torch.clip(obs, 0, 0.32)
 		#obs = obs/0.4*255
 		#obs = obs.to(torch.uint8)
-		return obs
+		return obs.to(device)
 
-	# simple imitation learning pretraining of our agent, using mean squared error
+	
+	# Lets solve this
 	def pretrain(self):
-		loss_fct = torch.nn.MSELoss()
+		"""
+		Simple behavioral cloning
+		"""
 		state, obs = self.envs.reset()
 		index = 0
 		p = 0
+		loss_sum = 0
+		# buffers for the agent actions and those taken by the environment
 		agent_actions = []
-		env_actions = []
+		env_actions = [] 
 		while p < self.pretrain_episodes:
-			obs = self.normalizeTransition(obs)
 			true_actions = self.envs.getNextAction()
-			unscaled_actions, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
-			agent_actions.append(unscaled_actions)
-			env_actions.append(true_actions)
-			#agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
-			_, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
-			index+=1
+			unscaled_true, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
+			_, unscaled_agent_action, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
+			state, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
+			agent_actions.append(unscaled_agent_action.cpu().detach().numpy())
+			env_actions.append(unscaled_true.cpu().numpy())
 			p += done.sum()
 
-		agent_actions = torch.cat(agent_actions, dim = 0)
-		env_actions = torch.cat(env_actions, dim = 0)	
+		# collect the experiences, and train the agent on those collected trajectories
+		agent_actions = np.concatenate(agent_actions, axis = 0)
+		env_actions = np.concatenate(env_actions, axis = 0)
 		# shuffle the actions around
-		indices = torch.randperm(agent_actions.shape[0])
+		indices = np.arange(agent_actions.shape[0])
 		agent_actions = agent_actions[indices]
 		env_actions = env_actions[indices]
-		for ind in range(0,  len(agent_actions), self.pretrain_batch_size):
-			loss = loss_fct(agent_actions[ind:ind+self.pretrain_batch_size].requires_grad_(True).to(device), env_actions[ind:ind+self.pretrain_batch_size].to(device))
+		for ind in tqdm(range(0,  len(agent_actions), self.pretrain_batch_size)):
+			loss = torch.nn.functional.mse_loss(torch.from_numpy(agent_actions[ind:ind+self.pretrain_batch_size]).requires_grad_(True).to(device), torch.from_numpy(env_actions[ind:ind+self.pretrain_batch_size]).to(device))
 			self.pretrain_optimizer.zero_grad()
 			loss.backward()
 			self.pretrain_optimizer.step()
@@ -241,8 +269,8 @@ class robot_ppo():
 	def train(self):
 		if self.track:
 			import wandb
-			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
-		writer = SummaryWriter(f"runs/{self.run_name}")
+			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.gym_id,monitor_gym=True,save_code=True)
+		writer = SummaryWriter(f"runs/{self.gym_id}")
 		writer.add_text("parameters/what", "what")
 		writer.add_text(
         "hyperparameters",
@@ -255,15 +283,15 @@ class robot_ppo():
 		torch.manual_seed(seed)
 		torch.backends.cudnn.deterministic = True 
 
+		# pretrain...some immitation learning to get us started
+		self.policy.train()
+		self.pretrain()
+
 		global_step = 0
 		start_time = time.time()
 		next_state, next_obs = self.envs.reset()
 		next_done = torch.zeros(self.num_envs).to(device)
 		policy_losses = []
-
-		# pretrain...some immitation learning to get us started
-		self.pretrain()
-
 
 		for update in tqdm(range(1, self.num_updates + 1)):
 			t0 = time.time()
@@ -273,18 +301,24 @@ class robot_ppo():
 				lrnow = frac * self.learning_rate
 				self.optimizer.param_groups[0]["lr"] = lrnow
 
+			# we want to anneal the expert weight as well
+			if self.anneal_exp:
+				frac = 1 - ((update - 1)/self.num_updates)
+				self.expert_weight *= frac
+
 			for step in range(0, self.num_steps):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_state
-				next_obs = self.normalizeTransition(next_obs)
 				self.buffer.observations[step] = next_obs
 				self.buffer.terminals[step] = next_done
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
-								
-			returns, advantages = self.advantages(next_state.to(device), next_obs.to(device), next_done)
-
+			
+			# for dataset aggregation, we have a separate 
+			
+			returns, advantages = self.advantages(next_state, next_obs, next_done)
+			
 			(b_states, b_obs, b_logprobs, b_actions, 
-				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
+				b_advantages, b_returns, b_values, b_true_actions) = self.buffer.flatten(returns, advantages)
 
 			b_inds = np.arange(self.batch_size)
 			clip_fracs = []
@@ -310,7 +344,7 @@ class robot_ppo():
 					# 1e-8 avoids division by 0
 					if self.norm_adv:
 						mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
-					# gradient descent, rather than ascent
+					# gradient descent, rather descentthan ascent
 					loss_one = -mb_advantages * ratio
 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
 					policy_loss = torch.max(loss_one, loss_two).mean()
@@ -321,6 +355,7 @@ class robot_ppo():
 						newvalue = newvalue.tensor.view(-1)
 					else:
 						newvalue = newvalue.view(-1)
+
 					if self.clip_vloss:
 						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
 						v_clipped = b_values[mb_inds] + torch.clamp(
@@ -334,8 +369,11 @@ class robot_ppo():
 					else:
 						value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
 
+					# integrate some behavioral cloning?
+					#expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
+
 					entropy_loss = entropy.mean()
-					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
+					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff #+ self.expert_weight * expert_loss
 
 					self.optimizer.zero_grad()
 					loss.backward()
@@ -367,13 +405,14 @@ class robot_ppo():
 
 		self.envs.close()
 		writer.close()
-		# save the dictionary states
-		save_state = {'actor_state':self.policy.actor.state_dict(),
-				'critic_state':self.policy.critic.state_dict(), 
-				'optimizer_state':self.optimizer.state_dict()}
-		torch.save(save_state, 'actor_critic_' + str(self.num_layers) + '.pt')
-		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
-		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
+		if(self.save_file_path is not None):
+			# save the dictionary states
+			save_state = {'actor_state':self.policy.actor.state_dict(),
+					'critic_state':self.policy.critic.state_dict(), 
+					'optimizer_state':self.optimizer.state_dict()}
+			torch.save(save_state, self.save_file_path  + 'actor_critic_' + str(self.num_layers) + '.pt')
+		#self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
+		#self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
 
 		return self.total_returns, self.total_episode_lengths, self.x_indices
 		#self.plot_episodic_returns(np.array(policy_losses), np.arange(len(policy_losses)))

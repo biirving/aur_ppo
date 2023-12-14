@@ -7,6 +7,8 @@ from torch.distributions import Normal, Categorical
 import numpy as np
 import sys
 
+epsilon = 1e-6
+
 # an implementation of the actor-critic 
 class robot_actor_critic(nn.Module):
 	def __init__(self, device, 
@@ -34,9 +36,9 @@ class robot_actor_critic(nn.Module):
 		pass
 
 	def value(self, state, obs):
-		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
-		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		return self.critic(cat_obs)
+		#state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+		#cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+		return self.critic(obs)
 
 	# courtesy of Dian Wang
 	def decodeActions(self, *args):
@@ -80,10 +82,40 @@ class robot_actor_critic(nn.Module):
 		else:
 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
 
+
+	# slight changes
 	def evaluate(self, state, obs, action=None):
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+		
+		if(self.equivariant):
+			action_mean, action_logstd = self.actor(cat_obs)
+		else:
+			action_mean = self.actor(cat_obs)
+			action_logstd = self.actor_logstd.expand_as(action_mean)
 
+		action_std = torch.exp(action_logstd)
+		dist = Normal(action_mean, action_std)
+		if action is None:
+			action = dist.rsample()
+
+		#y_t = torch.tanh(action)
+		#actions = y_t
+		log_prob = dist.log_prob(action)
+		# clipping the log probability
+		#log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
+		#log_prob = log_prob.sum(1, keepdim=True)
+
+		#action_mean = torch.tanh(action_mean)
+		entropy = dist.entropy()		
+		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
+		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(obs)
+
+
+	# pretrain the actor alone
+	def evaluate_pretrain(self, state, obs, action=None):
+		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
 		if(self.equivariant):
 			action_mean, action_logstd = self.actor(cat_obs)
 		else:
@@ -91,10 +123,11 @@ class robot_actor_critic(nn.Module):
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 		action_std = torch.exp(action_logstd)
 		dist = Normal(action_mean, action_std)
-		# control flow is bad
 		if action is None:
+			# we don't want two different action tensors
 			action = dist.rsample()
-		log_prob = dist.log_prob(action)
-		entropy = dist.entropy()
-		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
+		action = torch.tanh(action)
+		action_mean = torch.tanh(action_mean)
+		unscaled_action, action = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
+		return action.to(torch.float16), unscaled_action.to(torch.float16)
+

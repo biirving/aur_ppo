@@ -1,0 +1,531 @@
+diff --git a/src/actor_critic_2.pt b/src/actor_critic_2.pt
+index f610a3d..7086a62 100644
+Binary files a/src/actor_critic_2.pt and b/src/actor_critic_2.pt differ
+diff --git a/src/models/robot_actor_critic.py b/src/models/robot_actor_critic.py
+index 74e94c6..ad55021 100644
+--- a/src/models/robot_actor_critic.py
++++ b/src/models/robot_actor_critic.py
+@@ -7,6 +7,8 @@ from torch.distributions import Normal, Categorical
+ import numpy as np
+ import sys
+ 
++epsilon = 1e-6
++
+ # an implementation of the actor-critic 
+ class robot_actor_critic(nn.Module):
+ 	def __init__(self, device, 
+@@ -34,9 +36,9 @@ class robot_actor_critic(nn.Module):
+ 		pass
+ 
+ 	def value(self, state, obs):
+-		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+-		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+-		return self.critic(cat_obs)
++		#state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
++		#cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
++		return self.critic(obs)
+ 
+ 	# courtesy of Dian Wang
+ 	def decodeActions(self, *args):
+@@ -80,21 +82,52 @@ class robot_actor_critic(nn.Module):
+ 		else:
+ 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
+ 
++
++	# slight changes
+ 	def evaluate(self, state, obs, action=None):
+ 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+ 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+-
++		
+ 		if(self.equivariant):
+ 			action_mean, action_logstd = self.actor(cat_obs)
+ 		else:
+ 			action_mean = self.actor(cat_obs)
+ 			action_logstd = self.actor_logstd.expand_as(action_mean)
++
+ 		action_std = torch.exp(action_logstd)
+ 		dist = Normal(action_mean, action_std)
+-		# control flow is bad
+ 		if action is None:
+-			action = dist.rsample()
++			action = dist.sample()
++
++		#y_t = torch.tanh(action)
++		#actions = y_t
+ 		log_prob = dist.log_prob(action)
+-		entropy = dist.entropy()
++		# clipping the log probability
++		#log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
++		#log_prob = log_prob.sum(1, keepdim=True)
++
++		#action_mean = torch.tanh(action_mean)
++		entropy = dist.entropy()		
+ 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
+-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
++		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(obs)
++
++
++	# pretrain the actor alone
++	def evaluate_pretrain(self, state, obs, action=None):
++		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
++		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
++		if(self.equivariant):
++			action_mean, action_logstd = self.actor(cat_obs)
++		else:
++			action_mean = self.actor(cat_obs)
++			action_logstd = self.actor_logstd.expand_as(action_mean)
++		action_std = torch.exp(action_logstd)
++		dist = Normal(action_mean, action_std)
++		if action is None:
++			# we don't want two different action tensors
++			action = dist.rsample()
++		action = torch.tanh(action)
++		action_mean = torch.tanh(action_mean)
++		unscaled_action, action = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
++		return action.to(torch.float16), unscaled_action.to(torch.float16)
++
+diff --git a/src/nets/base_cnns.py b/src/nets/base_cnns.py
+index 6eb0ad1..6576fe4 100644
+--- a/src/nets/base_cnns.py
++++ b/src/nets/base_cnns.py
+@@ -52,7 +52,7 @@ class base_encoder(nn.Module):
+ 
+ # similar amount of parameters
+ class base_critic(nn.Module):
+-    def __init__(self, obs_shape=(2, 128, 128)):
++    def __init__(self, obs_shape=(1, 128, 128)):
+         super().__init__()
+         self.conv = base_encoder(obs_shape=obs_shape, out_dim=128)
+         self.critic = torch.nn.Sequential(
+diff --git a/src/nets/equiv.py b/src/nets/equiv.py
+index f27eb03..3637e39 100644
+--- a/src/nets/equiv.py
++++ b/src/nets/equiv.py
+@@ -88,7 +88,7 @@ class EquivariantActor(torch.nn.Module):
+ 
+ 
+ class EquivariantCritic(torch.nn.Module):
+-    def __init__(self, obs_shape=(2, 128, 128), n_hidden=128, initialize=True, N=4):
++    def __init__(self, obs_shape=(1, 128, 128), n_hidden=128, initialize=True, N=4):
+         super().__init__()
+         self.obs_channel = obs_shape[0]
+         self.n_hidden = n_hidden
+diff --git a/src/robot_ppo.py b/src/robot_ppo.py
+index c6c23a1..71c98c0 100644
+--- a/src/robot_ppo.py
++++ b/src/robot_ppo.py
+@@ -16,6 +16,7 @@ from env_wrapper import EnvWrapper
+ from torch.distributions import Normal, Categorical
+ 
+ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
++#device = torch.device('cpu')
+ 
+ class torch_buffer():
+ 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
+@@ -29,6 +30,7 @@ class torch_buffer():
+ 		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
+ 		self.terminals = torch.zeros((num_steps, num_envs)).to(device)
+ 		self.values = torch.zeros((num_steps, num_envs)).to(device)
++		self.true_actions = torch.zeros((num_steps, num_envs, action_shape)).to(device)
+ 
+ 	# flatten the buffer values for evaluation
+ 	def flatten(self, returns, advantages):
+@@ -37,10 +39,11 @@ class torch_buffer():
+ 								 self.observations.shape[2], self.observations.shape[3], self.observations.shape[4])
+ 		b_logprobs = self.log_probs.reshape(-1)
+ 		b_actions = self.actions.view(self.actions.shape[0] * self.actions.shape[1], self.actions.shape[2])
++		b_true_actions = self.true_actions.view(self.true_actions.shape[0] * self.true_actions.shape[1], self.true_actions.shape[2])
+ 		b_advantages = advantages.reshape(-1)
+ 		b_returns = returns.reshape(-1)
+ 		b_values = self.values.reshape(-1)
+-		return b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
++		return b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values, b_true_actions
+ 
+ # simple class for plotting in this environment
+ class store_returns():
+@@ -59,8 +62,6 @@ class store_returns():
+ 		self.env_returns[i] = []
+ 		return R, len_episode
+ 
+-
+-
+ class robot_ppo():
+ 	# add the metrics
+ 	def __init__(self, params):
+@@ -80,7 +81,7 @@ class robot_ppo():
+ 
+ 		# Tht total steps x the number of envs represents how many total
+ 		# steps in the said environment will be taken by the training loop		
+-		self.all_steps = self.num_steps * self.num_envs
++		self.all_steps = self.num_steps * self.num_envs 
+ 		self.batch_size = int(self.num_envs * self.num_steps)
+ 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
+ 		self.num_updates = self.total_timesteps // self.batch_size
+@@ -92,7 +93,7 @@ class robot_ppo():
+ 		# config used in Dian, Rob, and Robin's paper
+ 		env_config={'workspace': np.array([[ 0.25,  0.65],
+ 			[-0.2 ,  0.2 ],
+-			[ 0.01,  0.25]]), 'max_steps': 100, 
++			[ 0.01,  0.25]]), 'max_steps': 250, 
+ 			'obs_size': 128, 
+ 			'fast_mode': True, 
+ 			'action_sequence': 'pxyzr', 
+@@ -127,33 +128,54 @@ class robot_ppo():
+ 		self.episodic_returns = store_returns(self.num_envs, self.gamma)
+ 
+ 	def rewards_to_go(self, step, next_state, next_obs, global_step, writer):
++		#next_obs = self.normalizeTransition(next_obs)
+ 		with torch.no_grad():
+ 			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
+ 			if(self.equivariant):
+ 				self.buffer.values[step] = value.tensor.flatten()
+ 			else:
+ 				self.buffer.values[step] = value.flatten()
+-		self.buffer.actions[step] = actions
++		self.buffer.actions[step] = unscaled 
+ 		self.buffer.log_probs[step] = logprob
+ 
++		#self.buffer.true_actions[step] = true_actions
++
+ 		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
+ 
+ 		for i, rew in enumerate(reward):
+ 			self.episodic_returns.add_value(i, rew)
+ 
+ 		self.buffer.rewards[step] = reward.view(-1)
+-		next_states, next_obs, next_done = next_states, next_obs.to(device), done.to(device)
++		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
+ 
+ 		for i, d in enumerate(done):
+ 			if d:
+ 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
+ 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
+ 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
+-				self.plot_index += 1
+ 				break
+ 
+ 		return next_states, next_obs, next_done
+ 
++	def expert_rollout(self, step, next_state, next_obs, global_step, writer):
++		#next_obs = self.normalizeTransition(next_obs)
++		with torch.no_grad():
++			true_action = self.envs.getNextAction()
++			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
++			if(self.equivariant):
++				self.buffer.values[step] = value.tensor.flatten()
++			else:
++				self.buffer.values[step] = value.flatten()
++
++		self.buffer.actions[step] = actions
++		self.buffer.log_probs[step] = logprob
++		next_states, next_obs, reward, done = self.envs.step(true_action, auto_reset=True)
++		for i, rew in enumerate(reward):
++			self.episodic_returns.add_value(i, rew)
++		self.buffer.rewards[step] = reward.view(-1)
++		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
++		return next_states, next_obs, next_done
++
+ 	def run_gae(self, next_value, next_done):
+ 		advantages = torch.zeros_like(self.buffer.rewards)
+ 		lastgaelam = 0
+@@ -204,45 +226,65 @@ class robot_ppo():
+ 		#obs = torch.clip(obs, 0, 0.32)
+ 		#obs = obs/0.4*255
+ 		#obs = obs.to(torch.uint8)
+-		return obs
++		return obs.to(device)
+ 
+-	# simple imitation learning pretraining of our agent, using mean squared error
++	
++	# TODO: Fix
+ 	def pretrain(self):
+-		loss_fct = torch.nn.MSELoss()
++		"""
++		Simple behavioral cloning
++		"""
+ 		state, obs = self.envs.reset()
+ 		index = 0
+ 		p = 0
++		loss_sum = 0
++		# buffers for the agent actions and those taken by the environment
+ 		agent_actions = []
+-		env_actions = []
++		env_actions = [] 
+ 		while p < self.pretrain_episodes:
+-			obs = self.normalizeTransition(obs)
++			#obs = self.normalizeTransition(obs)
+ 			true_actions = self.envs.getNextAction()
+-			unscaled_actions, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
+-			agent_actions.append(unscaled_actions)
++			unscaled_true, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
++			agent_actions.append(unscaled_true)
+ 			env_actions.append(true_actions)
+-			#agent_action, _, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
+-			_, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
+-			index+=1
++			# agent blindly getting an action
++			_, unscaled_agent_action, _, _, _ = self.policy.evaluate(state.to(device), obs.to(device))
++			state, obs, _, done = self.envs.step(scaled_true_actions, auto_reset=True)
++
++
++		
++			#loss = loss_fct(agent_action.to(device), scaled_true_actions.to(device))
++			# want the network to produce decoded actions which are close to the baseline truth
++			loss = torch.nn.functional.mse_loss(unscaled_agent_action.requires_grad_(True).to(device), true_actions.to(device))
++			loss_sum += loss
++			# do we want all of the parameters changed accordingly?
++			self.pretrain_optimizer.zero_grad()
++			loss.backward()
++			self.pretrain_optimizer.step()
++			index += 1 
+ 			p += done.sum()
++		print('loss sum', loss_sum)
+ 
+-		agent_actions = torch.cat(agent_actions, dim = 0)
+-		env_actions = torch.cat(env_actions, dim = 0)	
++		"""
++		agent_actions = torch.cat(agent_actions, dim = 0).to(torch.float16)
++		env_actions = torch.cat(env_actions, dim = 0).to(torch.float16)	
+ 		# shuffle the actions around
+ 		indices = torch.randperm(agent_actions.shape[0])
+ 		agent_actions = agent_actions[indices]
+ 		env_actions = env_actions[indices]
+ 		for ind in range(0,  len(agent_actions), self.pretrain_batch_size):
+-			loss = loss_fct(agent_actions[ind:ind+self.pretrain_batch_size].requires_grad_(True).to(device), env_actions[ind:ind+self.pretrain_batch_size].to(device))
++			loss = loss_fct(agent_actions[ind:ind+self.pretrain_batch_size], env_actions[ind:ind+self.pretrain_batch_size].to(device))
+ 			self.pretrain_optimizer.zero_grad()
+ 			loss.backward()
+ 			self.pretrain_optimizer.step()
++		"""
+ 
+ 	#@profile
+ 	def train(self):
+ 		if self.track:
+ 			import wandb
+-			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.run_name,monitor_gym=True,save_code=True)
+-		writer = SummaryWriter(f"runs/{self.run_name}")
++			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.gym_id,monitor_gym=True,save_code=True)
++		writer = SummaryWriter(f"runs/{self.gym_id}")
+ 		writer.add_text("parameters/what", "what")
+ 		writer.add_text(
+         "hyperparameters",
+@@ -255,16 +297,16 @@ class robot_ppo():
+ 		torch.manual_seed(seed)
+ 		torch.backends.cudnn.deterministic = True 
+ 
++		# pretrain...some immitation learning to get us started
++		self.policy.train()
++		self.pretrain()
++
+ 		global_step = 0
+ 		start_time = time.time()
+ 		next_state, next_obs = self.envs.reset()
+ 		next_done = torch.zeros(self.num_envs).to(device)
+ 		policy_losses = []
+ 
+-		# pretrain...some immitation learning to get us started
+-		self.pretrain()
+-
+-
+ 		for update in tqdm(range(1, self.num_updates + 1)):
+ 			t0 = time.time()
+ 			# adjust learning rate
+@@ -273,18 +315,24 @@ class robot_ppo():
+ 				lrnow = frac * self.learning_rate
+ 				self.optimizer.param_groups[0]["lr"] = lrnow
+ 
++			# we want to anneal the expert weight as well
++			if self.anneal_exp:
++				frac = 1 - ((update - 1)/self.num_updates)
++				self.expert_weight *= frac
++
+ 			for step in range(0, self.num_steps):
+ 				global_step += 1 * self.num_envs
+ 				self.buffer.states[step] = next_state
+-				next_obs = self.normalizeTransition(next_obs)
+ 				self.buffer.observations[step] = next_obs
+ 				self.buffer.terminals[step] = next_done
+ 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
+-								
+-			returns, advantages = self.advantages(next_state.to(device), next_obs.to(device), next_done)
+-
++			
++			# for dataset aggregation, we have a separate 
++			
++			returns, advantages = self.advantages(next_state, next_obs, next_done)
++			
+ 			(b_states, b_obs, b_logprobs, b_actions, 
+-				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
++				b_advantages, b_returns, b_values, b_true_actions) = self.buffer.flatten(returns, advantages)
+ 
+ 			b_inds = np.arange(self.batch_size)
+ 			clip_fracs = []
+@@ -310,7 +358,7 @@ class robot_ppo():
+ 					# 1e-8 avoids division by 0
+ 					if self.norm_adv:
+ 						mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
+-					# gradient descent, rather than ascent
++					# gradient descent, rather descentthan ascent
+ 					loss_one = -mb_advantages * ratio
+ 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
+ 					policy_loss = torch.max(loss_one, loss_two).mean()
+@@ -321,6 +369,7 @@ class robot_ppo():
+ 						newvalue = newvalue.tensor.view(-1)
+ 					else:
+ 						newvalue = newvalue.view(-1)
++
+ 					if self.clip_vloss:
+ 						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+ 						v_clipped = b_values[mb_inds] + torch.clamp(
+@@ -334,8 +383,11 @@ class robot_ppo():
+ 					else:
+ 						value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
+ 
++					# integrate some behavioral cloning?
++					#expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
++
+ 					entropy_loss = entropy.mean()
+-					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff
++					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff #+ self.expert_weight * expert_loss
+ 
+ 					self.optimizer.zero_grad()
+ 					loss.backward()
+@@ -372,8 +424,8 @@ class robot_ppo():
+ 				'critic_state':self.policy.critic.state_dict(), 
+ 				'optimizer_state':self.optimizer.state_dict()}
+ 		torch.save(save_state, 'actor_critic_' + str(self.num_layers) + '.pt')
+-		self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
+-		self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
++		#self.plot_episodic_returns(np.array(self.total_returns), np.array(np.array(self.x_indices)), 'episodic returns')
++		#self.plot_episodic_returns(np.array(self.total_episode_lengths), np.array(np.array(self.x_indices)), 'episodic lengths')
+ 
+ 		return self.total_returns, self.total_episode_lengths, self.x_indices
+ 		#self.plot_episodic_returns(np.array(policy_losses), np.arange(len(policy_losses)))
+diff --git a/src/robot_run.py b/src/robot_run.py
+index 090087a..6bdb8d1 100644
+--- a/src/robot_run.py
++++ b/src/robot_run.py
+@@ -26,7 +26,7 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
+ 
+ if __name__=='__main__':
+ 	parser = argparse.ArgumentParser()
+-	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_pulling')
++	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_stacking')
+ 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
+ 	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
+ 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
+@@ -53,17 +53,19 @@ if __name__=='__main__':
+ 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
+ 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
+ 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
+-	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=False)
+-	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
++	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=True)
++	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=150)
+ 	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
++	parser.add_argument('-expw', '--expert_weight', type=float, help='How much do we want the expert trajectory to contribute?', default=0.1)
++	parser.add_argument('-anexp', '--anneal_exp', type=bool, help='Do we want to anneal the expert weight?', default=False)
+ 	args = parser.parse_args()
+ 
+ 	# using mujoco parameters from open ai baselines
+ 	if(args.continuous):
+ 		args.learning_rate = 3e-4
+ 		args.num_envs = 5 
+-		args.total_timesteps = 50000 
+-		args.num_steps = 1000 
++		args.total_timesteps = 500000 
++		args.num_steps = 100
+ 		args.num_minibatches = 32
+ 		args.num_update_epochs = 10
+ 		args.entropy_coeff = 0
+@@ -98,7 +100,9 @@ if __name__=='__main__':
+ 		'track':args.track,
+ 		'equivariant':args.equivariant,
+ 		'pretrain_episodes':args.pretrain_episodes,
+-		'pretrain_batch_size':args.pretrain_batch_size
++		'pretrain_batch_size':args.pretrain_batch_size,
++		'expert_weight':args.expert_weight,
++		'anneal_exp':args.anneal_exp
+ 	}
+ 
+ 	#all_returns = []
+diff --git a/src/tester.py b/src/tester.py
+index a2e4a22..fb1b6f6 100644
+--- a/src/tester.py
++++ b/src/tester.py
+@@ -1,27 +1,59 @@
+ from env_wrapper import EnvWrapper
++from tqdm import tqdm
+ import torch
+ import numpy as np
+ from nets.base_cnns import base_critic, base_actor
++from models import robot_actor_critic
+ 
+-"""
+-num_processes=10
++class store_returns():
++	def __init__(self, num_envs, gamma):
++		self.gamma = gamma
++		self.env_returns = [[] for _ in range(num_envs)]
++	
++	def add_value(self, i, reward):
++		self.env_returns[i].append(reward)
++
++	def calc_discounted_return(self, i):
++		len_episode = len(self.env_returns[i])
++		R = 0
++		for r in self.env_returns[i][::-1]:
++			R = r + self.gamma * R
++		self.env_returns[i] = []
++		return R, len_episode
++num_processes=1
+ num_eval_processes=5
+ simulator='pybullet'
+-env='close_loop_block_pulling'
++env='close_loop_block_stacking'
+ env_config={'workspace': np.array([[ 0.25,  0.65],
+        [-0.2 ,  0.2 ],
+-       [ 0.01,  0.25]]), 'max_steps': 100, 'obs_size': 128, 'fast_mode': True, 'action_sequence': 'pxyzr', 'render': False, 'num_objects': 2, 'random_orientation': True, 'robot': 'kuka', 'workspace_check': 'point', 'object_scale_range': (1, 1), 'hard_reset_freq': 1000, 'physics_mode': 'fast', 'view_type': 'camera_center_xyz', 'obs_type': 'pixel', 'view_scale': 1.5, 'transparent_bin': True}
++       [ 0.01,  0.25]]), 'max_steps': 1024, 'obs_size': 128, 'fast_mode': True, 'action_sequence': 'pxyzr', 'render': False, 'num_objects': 2, 'random_orientation': True, 'robot': 'kuka', 'workspace_check': 'point', 'object_scale_range': (1, 1), 'hard_reset_freq': 1000, 'physics_mode': 'fast', 'view_type': 'camera_center_xyz', 'obs_type': 'pixel', 'view_scale': 1.5, 'transparent_bin': True}
+ planner_config={'random_orientation': True, 'dpos': 0.02, 'drot': 0.19634954084936207}
+ envs = EnvWrapper(num_processes, simulator, env, env_config, planner_config)
+ 
++device = torch.device('cuda')
++test = robot_actor_critic(device, True)
++episodes = store_returns(num_processes, 0.99)
+ state, obs = envs.reset()
+-print(state)
+-act = envs.getNextAction()
+-eval_envs = EnvWrapper(num_eval_processes, simulator, env, env_config, planner_config)
+-what, what_2, what_3, what_4 = envs.step(act)
++for index in tqdm(range(10000)):
++       act = envs.getNextAction()
++       unscaled, scaled = test.getActionFromPlan(act)
++       next_state, next_obs, reward, done = envs.step(scaled, auto_reset=True)
++       for i, rew in enumerate(reward):
++              episodes.add_value(i, rew)
++       for i, d in enumerate(done):
++              if d:
++                     discounted_return, episode_length = episodes.calc_discounted_return(i)
++                     print(discounted_return)
++                     print(episode_length)
++
++
+ """
+-yuh = base_critic()
+-sample = torch.randn(5, 2, 128, 128)
+-huh = base_actor()
+-#print(base_critic(sample))
+-print(yuh(sample))
+\ No newline at end of file
++device = torch.device('cuda')
++test = robot_actor_critic(device, True)
++
++state = torch.randn((5))
++obs = torch.randn((5, 1, 128, 128))
++
++actions, act, _, _, _ = test.evaluate(state, obs)
++print(actions.requires_grad)
++"""
+\ No newline at end of file

@@ -88,7 +88,7 @@ class EquivariantActor(torch.nn.Module):
 
 
 class EquivariantCritic(torch.nn.Module):
-    def __init__(self, obs_shape=(2, 128, 128), n_hidden=128, initialize=True, N=4):
+    def __init__(self, obs_shape=(1, 128, 128), n_hidden=128, initialize=True, N=4):
         super().__init__()
         self.obs_channel = obs_shape[0]
         self.n_hidden = n_hidden
