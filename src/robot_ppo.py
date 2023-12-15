@@ -14,6 +14,7 @@ from tqdm import tqdm
 import random
 from env_wrapper import EnvWrapper
 from torch.distributions import Normal, Categorical
+import collections
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 #device = torch.device('cpu')
@@ -43,7 +44,11 @@ class torch_buffer():
 		b_advantages = advantages.reshape(-1)
 		b_returns = returns.reshape(-1)
 		b_values = self.values.reshape(-1)
-		return b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values, b_true_actions
+		return (b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values, b_true_actions)
+
+# How are we going to use the expert action to step through?
+PRETRAIN = collections.namedtuple('pretrain', 'state obs action reward done')
+
 
 # simple class for plotting in this environment
 class store_returns():
@@ -160,6 +165,7 @@ class robot_ppo():
 
 		return next_states, next_obs, next_done
 
+
 	def expert_rollout(self, step, next_state, next_obs, global_step, writer):
 		#next_obs = self.normalizeTransition(next_obs)
 		with torch.no_grad():
@@ -180,6 +186,8 @@ class robot_ppo():
 		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		return next_states, next_obs, next_done
 
+
+	# all of these have to be generalized to support the expert buffer?
 	def run_gae(self, next_value, next_done):
 		advantages = torch.zeros_like(self.buffer.rewards)
 		lastgaelam = 0
@@ -245,6 +253,8 @@ class robot_ppo():
 		# buffers for the agent actions and those taken by the environment
 		agent_actions = []
 		env_actions = [] 
+
+
 		while p < self.pretrain_episodes:
 			true_actions = self.envs.getNextAction()
 			unscaled_true, scaled_true_actions = self.policy.getActionFromPlan(true_actions)
@@ -254,18 +264,92 @@ class robot_ppo():
 			env_actions.append(unscaled_true.cpu().numpy())
 			p += done.sum()
 
+
 		# collect the experiences, and train the agent on those collected trajectories
-		agent_actions = np.concatenate(agent_actions, axis = 0)
-		env_actions = np.concatenate(env_actions, axis = 0)
+		#agent_actions = np.concatenate(agent_actions, axis = 0)
+		#env_actions = np.concatenate(env_actions, axis = 0)
 		# shuffle the actions around
-		indices = np.arange(agent_actions.shape[0])
-		agent_actions = agent_actions[indices]
-		env_actions = env_actions[indices]
-		for ind in tqdm(range(0,  len(agent_actions), self.pretrain_batch_size)):
-			loss = torch.nn.functional.mse_loss(torch.from_numpy(agent_actions[ind:ind+self.pretrain_batch_size]).requires_grad_(True).to(device), torch.from_numpy(env_actions[ind:ind+self.pretrain_batch_size]).to(device))
-			self.pretrain_optimizer.zero_grad()
-			loss.backward()
-			self.pretrain_optimizer.step()
+		#indices = np.arange(agent_actions.shape[0])
+		#agent_actions = agent_actions[indices]
+		#env_actions = env_actions[indices]
+		#for ind in tqdm(range(0,  len(agent_actions), self.pretrain_batch_size)):
+		#	loss = torch.nn.functional.mse_loss(torch.from_numpy(agent_actions[ind:ind+self.pretrain_batch_size]).requires_grad_(True).to(device), torch.from_numpy(env_actions[ind:ind+self.pretrain_batch_size]).to(device))
+	#		self.pretrain_optimizer.zero_grad()
+	#		loss.backward()
+	#		self.pretrain_optimizer.step()
+
+	def update(self, expert, buffer, update_epochs, batch_size, minibatch_size, policy_losses):
+		if(expert):
+			pass
+		else:
+			(b_states, b_obs, b_logprobs, b_actions, 
+				b_advantages, b_returns, b_values, b_true_actions) = buffer 
+
+		b_inds = np.arange(batch_size)
+		clip_fracs = []
+		for ep in range(update_epochs):
+			np.random.shuffle(b_inds)
+			for index in range(0, batch_size, minibatch_size):
+				mb_inds = b_inds[index:index+self.minibatch_size]
+				
+				_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
+
+				old_log_probs = b_logprobs[mb_inds]
+				log_ratio = newlogprob - old_log_probs 
+
+				ratio = log_ratio.exp()
+
+				with torch.no_grad():	
+					old_approx_kl = (-log_ratio).mean()
+					approx_kl = ((ratio - 1) - log_ratio).mean()
+					clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
+
+				# we normalize at the minibatch level
+				mb_advantages = b_advantages[mb_inds]
+				# 1e-8 avoids division by 0
+				if self.norm_adv:
+					mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
+				# gradient descent, rather descentthan ascent
+				loss_one = -mb_advantages * ratio
+				loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
+				policy_loss = torch.max(loss_one, loss_two).mean()
+				policy_losses.append(policy_loss.item())
+
+				# value clipping
+				if(self.equivariant):
+					newvalue = newvalue.tensor.view(-1)
+				else:
+					newvalue = newvalue.view(-1)
+
+				if self.clip_vloss:
+					v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+					v_clipped = b_values[mb_inds] + torch.clamp(
+						newvalue - b_values[mb_inds],
+						-self.clip_coeff,
+						self.clip_coeff,
+					)
+					v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+					v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+					value_loss = 0.5 * v_loss_max.mean()
+				else:
+					value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
+
+				# integrate some behavioral cloning?
+				#expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(true), b_true_actions[mb_inds])
+
+				entropy_loss = entropy.mean()
+				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff #+ self.expert_weight * expert_loss
+
+				self.optimizer.zero_grad()
+				loss.backward()
+				nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+				self.optimizer.step()
+			if self.target_kl is not None:
+				if approx_kl > self.target_kl:
+					break
+		return (policy_loss, value_loss, entropy_loss, old_approx_kl, approx_kl, clip_fracs)
+
+
 
 	#@profile
 	def train(self):
@@ -287,6 +371,8 @@ class robot_ppo():
 
 		# pretrain...some immitation learning to get us started
 		self.policy.train()
+
+		# alternate pretraining method
 		self.pretrain()
 
 		global_step = 0
@@ -308,6 +394,8 @@ class robot_ppo():
 				frac = 1 - ((update - 1)/self.num_updates)
 				self.expert_weight *= frac
 
+
+			# I think that the expert episodes should be integrated into this loop?
 			for step in range(0, self.num_steps):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_state
@@ -316,84 +404,23 @@ class robot_ppo():
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
 			
 			# for dataset aggregation, we have a separate 
-			
 			returns, advantages = self.advantages(next_state, next_obs, next_done)
-			
-			(b_states, b_obs, b_logprobs, b_actions, 
-				b_advantages, b_returns, b_values, b_true_actions) = self.buffer.flatten(returns, advantages)
+			expert = False
+			buffer = self.buffer.flatten(returns, advantages)
 
-			b_inds = np.arange(self.batch_size)
-			clip_fracs = []
-			for ep in range(self.num_update_epochs):
-				np.random.shuffle(b_inds)
-				for index in range(0, self.batch_size, self.minibatch_size):
-					mb_inds = b_inds[index:index+self.minibatch_size]
-					
-					_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
-
-					old_log_probs = b_logprobs[mb_inds]
-					log_ratio = newlogprob - old_log_probs 
-
-					ratio = log_ratio.exp()
-
-					with torch.no_grad():	
-						old_approx_kl = (-log_ratio).mean()
-						approx_kl = ((ratio - 1) - log_ratio).mean()
-						clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
-
-					# we normalize at the minibatch level
-					mb_advantages = b_advantages[mb_inds]
-					# 1e-8 avoids division by 0
-					if self.norm_adv:
-						mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
-					# gradient descent, rather descentthan ascent
-					loss_one = -mb_advantages * ratio
-					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
-					policy_loss = torch.max(loss_one, loss_two).mean()
-					policy_losses.append(policy_loss.item())
-
-					# value clipping
-					if(self.equivariant):
-						newvalue = newvalue.tensor.view(-1)
-					else:
-						newvalue = newvalue.view(-1)
-
-					if self.clip_vloss:
-						v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-						v_clipped = b_values[mb_inds] + torch.clamp(
-							newvalue - b_values[mb_inds],
-							-self.clip_coeff,
-							self.clip_coeff,
-						)
-						v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-						v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-						value_loss = 0.5 * v_loss_max.mean()
-					else:
-						value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
-
-					# integrate some behavioral cloning?
-					#expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
-
-					entropy_loss = entropy.mean()
-					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff #+ self.expert_weight * expert_loss
-
-					self.optimizer.zero_grad()
-					loss.backward()
-					nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-					self.optimizer.step()
-
-				if self.target_kl is not None:
-					if approx_kl > self.target_kl:
-						break
+			(policy_loss, 
+			value_loss, 
+			entropy_loss, 
+			old_approx_kl, 
+			approx_kl, 
+			clip_fracs) = self.update(expert, buffer, self.batch_size, self.minibatch_size, policy_losses)	
 
 			policy_losses.append(policy_loss.item())
 
-			y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+			y_pred, y_true = buffer[6].cpu().numpy(), buffer[5].cpu().numpy()
 			var_y = np.var(y_true)
 			explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-			# should be done in a separate function
-			# Writer object?
 			writer.add_scalar("charts/learning_rate", self.optimizer.param_groups[0]["lr"], global_step)
 			writer.add_scalar("losses/value_loss", value_loss.item(), global_step)
 			writer.add_scalar("losses/policy_loss", policy_loss.item(), global_step)
