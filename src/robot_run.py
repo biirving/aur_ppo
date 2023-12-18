@@ -53,8 +53,9 @@ if __name__=='__main__':
 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
-	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=True)
+	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=False)
 	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
+	parser.add_argument('-pts', '--pretrain_steps', type=int, help='Number of pretraining steps', default=20)
 	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
 	parser.add_argument('-expw', '--expert_weight', type=float, help='How much do we want the expert trajectory to contribute?', default=0.1)
 	parser.add_argument('-anexp', '--anneal_exp', type=bool, help='Do we want to anneal the expert weight?', default=False)
@@ -101,6 +102,7 @@ if __name__=='__main__':
 		'track':args.track,
 		'equivariant':args.equivariant,
 		'pretrain_episodes':args.pretrain_episodes,
+		'pretrain_steps':args.pretrain_steps,
 		'pretrain_batch_size':args.pretrain_batch_size,
 		'expert_weight':args.expert_weight,
 		'anneal_exp':args.anneal_exp,
