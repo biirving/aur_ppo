@@ -1,33 +1,11 @@
 #!/usr/bin/env python
 import torch
 from ppo import ppo
-#from robot_ppo import robot_ppo
 import os, sys, argparse, time
 import matplotlib.pyplot as plt
 import numpy as np
 from distutils.util import strtobool
 
-def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title):
-	plt.clf()
-	fig, ax = plt.subplots(figsize=(12, 8))
-	ax.set_ylabel(ylabel)
-	ax.set_xlabel("Steps")
-	h_list = []
-
-	for arr, legend, color in zip(arr_list, legend_list, color_list):
-		arr_err = arr.std(axis=0) / np.sqrt(arr.shape[0])
-		h = ax.plot(x_indices, arr.mean(axis=0), color=color, label=legend)
-		arr_err = 1.96 * arr_err
-		ax.fill_between(x_indices, arr.mean(axis=0) - arr_err, arr.mean(axis=0) + arr_err, alpha=0.3,
-		                color=color)
-		h_list.append(h)
-	ax.set_title(f"{fig_title}")
-	#ax.legend(handles=h_list)
-	plt.savefig('total_returns.png')
-	#plt.show()
-
-# should be a general function
-# have to clean everything up, once I have it fuckin working
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='HalfCheetah-v4')
@@ -60,7 +38,6 @@ if __name__=='__main__':
 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
 	args = parser.parse_args()
 
-	# using mujoco parameters from open ai baselines
 	if(args.continuous):
 		args.learning_rate = 3e-4
 		args.num_envs = 1
@@ -100,19 +77,5 @@ if __name__=='__main__':
 		'track':args.track
 	}
 
-	#all_returns = []
-	#all_episode_lengths = []
-	#trials = args.trials
-	#for _ in range(trials):
 	to_run = ppo(params)
 	total_returns, total_episode_lengths, x_indices = to_run.train()
-	#all_returns.append(total_returns)
-	#all_episode_lengths.append(total_episode_lengths)
-
-	# Find the minimum length
-	#min_length = min(len(sublist) for sublist in all_returns)
-	#Trim each sublist to the minimum length
-	#trim_returns = [sublist[:min_length] for sublist in all_returns]
-	# then trim all of the trials down to the minimum length
-	#plot_curves(np.array([trim_returns]), ['Agent'], x_indices[:min_length], ['red'], 'Total Return', args.gym_id)
-	# plot with confidence bands and stuff
