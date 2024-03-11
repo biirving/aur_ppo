@@ -16,7 +16,6 @@ from torch.distributions import Normal, Categorical
 import collections
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-#device = torch.device('cpu')
 
 class torch_buffer():
 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
@@ -83,20 +82,16 @@ class store_returns():
 		return R, len_episode
 
 class robot_ppo():
-	# add the metrics
 	def __init__(self, params):
 		# accessing through the dictionary is slower
 		self.params_dict = params
-
 		self.all_steps = None
 		self.minibatch_size = None
 		# Define a list of attributes to exclude from direct assignment
 		exclude_list = ['batch_size', 'minibatch_size']
 		# Iterate through the keys in params
 		for key, value in params.items():
-			# Check if the key is not in the exclude list
 			if key not in exclude_list:
-				# Dynamically set the attribute based on the key-value pair
 				setattr(self, key, value)
 
 		# Tht total steps x the number of envs represents how many total
@@ -207,7 +202,6 @@ class robot_ppo():
 		next_states, next_obs, next_done = next_states, next_obs, done
 		return next_states, next_obs, next_done
 
-	# all of these have to be generalized to support the expert buffer?
 	def run_gae(self, next_value, next_done, buffer, num_steps):
 		advantages = torch.zeros_like(buffer.rewards)
 		lastgaelam = 0
@@ -328,17 +322,12 @@ class robot_ppo():
 				if(pretrain):
 					# the simple mse loss between the proposed actions from the arm and the "true" actions
 					expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
-					# the expert weight should anneal over time, approaching zero?
-					# if using it in the normal training step
 					#loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff + self.expert_weight * expert_loss
-					# How the carnigie melon paper does the behavior cloning pretraining
 					loss = self.expert_weight * expert_loss
 				else:
 					# also, should I have the expert weight and loss throughout entire training loop?
 					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff	
 
-				# scale the datatype automatically 
-				#with torch.autocast(device_typ="cuda", dtype=torch.float16)
 				self.optimizer.zero_grad()
 				loss.backward()
 				nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)

@@ -59,7 +59,7 @@ if __name__=='__main__':
 	parser.add_argument('-na', '--norm_adv', type=bool, help='Normalize advantage estimates', default=True)
 	parser.add_argument('-p', '--capture_video', type=bool, help='Whether to capture the video or not', default=False)
 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
-	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=True)
+	parser.add_argument('-c', '--continuous', type=lambda x: bool(strtobool(x)), default=True, nargs='?', const=True)
 	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='close_loop_block_pulling')
 	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)

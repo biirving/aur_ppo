@@ -298,7 +298,6 @@ class ppo():
 		#self.plot_episodic_returns(np.array(policy_losses), np.arange(len(policy_losses)))
 
 	def plot(self, loss, x_indices):
-		#timesteps = np.arange(1, loss.shape[0] + 1)
 		plt.plot(np.array(x_indices), loss)
 		plt.xlabel('Timestep')
 		plt.ylabel('Total returns')
@@ -308,7 +307,6 @@ class ppo():
 	def moving_average(self, data, window_size):
 		return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
 
-	# add chart titles and all of that stuff
 	def plot_episodic_returns(self, episodic_returns, x_indices, title, window_size=10):
 		smoothed_returns = self.moving_average(episodic_returns, window_size)
 		plt.plot(x_indices, episodic_returns, label='Episodic Returns')
