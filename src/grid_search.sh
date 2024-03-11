@@ -1,35 +1,30 @@
 #!/bin/bash
 
-
-# search for the best PPO parameters
-
-# run PPO without updating weights and biases charts
-time_steps=1700000
-for batch in 1 4 8 16 32 64
-do
-for layer in 2 8 16 32
+for value_coeff in 0.0 0.5
 do 
-for env in 4 8 16 32
-do 
-for dim in 64 128 256
-do 
-for dropout in 0.0 0.2 0.4 0.8
-do
-#job=$(sbatch -p gpu --time=08:00:00 --mem=32GB --gres=gpu:p100:1 --output=/work/nlp/b.irving/ppo_outputs/$batch'_'$env'_'$dim'_'$dropout'_'%j.out run.py -nm $batch -nl $layer -ne $env -d $dim -do $dropout -t=$time_steps)
-job=`sbatch -p short \
---time=08:00:00 \
---mem=32GB \
- --output=/work/nlp/b.irving/ppo_outputs/$batch'_'$env'_'$dim'_'$dropout'_'%j.out \
- run.py \
- -nm $batch \
- -nl $layer \
- -ne $env \
- -d $dim \
- -do $dropout \
- --t=$time_steps | awk '{print $NF}'`
-echo $job
-done
-done
-done
-done
+    for entropy_coeff in 0.0 0.1 
+    do 
+        for learning_rate in 3e-3 1e-4
+        do 
+            for clip_coeff in 0.0 0.2 0.8
+            do
+                for num_minibatches in 4 16
+                do
+                    job=$(sbatch -p gpu \
+                    --time=08:00:00 \
+                    --mem=32GB \
+                    --gres=gpu:p100:1 \
+                    --output=/work/nlp/b.irving/ppo_outputs/${value_coeff}_${entropy_coeff}_${learning_rate}_${clip_coeff}_${num_minibatches}_%j.out \
+                    robot_run.py \
+                     --track=True \
+                     --value_coeff=$value_coeff \
+                     --clip_coeff=$clip_coeff \
+                     --entropy_coeff=$entropy_coeff \
+                     --learning_rate=$learning_rate \
+                     --num_minibatches=$num_minibatches | awk '{print $NF}')
+                    echo $job
+                done
+            done
+        done
+    done
 done

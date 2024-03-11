@@ -12,7 +12,7 @@ epsilon = 1e-6
 # an implementation of the actor-critic 
 class robot_actor_critic(nn.Module):
 	def __init__(self, device, 
-		equivariant:bool, dx=0.005, dy=0.005, dz=0.005, dr=np.pi/16, n_a=5, tau=0.001) -> None:
+		equivariant:bool, dx=0.02, dy=0.02, dz=0.02, dr=np.pi/8, n_a=5, tau=0.001) -> None:
 		super(robot_actor_critic, self).__init__()
 	    # action ranges
 		self.p_range = torch.tensor([0, 1])
@@ -28,17 +28,18 @@ class robot_actor_critic(nn.Module):
 			self.actor = EquivariantActor().to(device)
 			self.critic = EquivariantCritic().to(device)
 		else:
-			self.actor = base_actor()
+			self.actor = base_actor().to(device)
 			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(5)))
-			self.critic = base_critic() 
+			self.critic = base_critic().to(device)
+		# Use a vision transformer instead of the CNN?
 		
 	def forward(self, act):
 		pass
 
 	def value(self, state, obs):
-		#state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
-		#cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		return self.critic(obs)
+		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+		return self.critic(cat_obs)
 
 	# courtesy of Dian Wang
 	def decodeActions(self, *args):
@@ -83,7 +84,6 @@ class robot_actor_critic(nn.Module):
 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
 
 
-	# slight changes
 	def evaluate(self, state, obs, action=None):
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
@@ -95,21 +95,23 @@ class robot_actor_critic(nn.Module):
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 
 		action_std = torch.exp(action_logstd)
+		
 		dist = Normal(action_mean, action_std)
+
 		if action is None:
 			action = dist.rsample()
 
-		#y_t = torch.tanh(action)
-		#actions = y_t
+		action = torch.tanh(action)
 		log_prob = dist.log_prob(action)
+
 		# clipping the log probability
-		#log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
-		#log_prob = log_prob.sum(1, keepdim=True)
+		log_prob -= torch.log((1 - action.pow(2)) + epsilon)
+		log_prob = log_prob.sum(1, keepdim=True)
 
 		#action_mean = torch.tanh(action_mean)
 		entropy = dist.entropy()		
 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(obs)
+		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
 
 
 	# pretrain the actor alone

@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 import torch
+import sys
+sys.path.append('/work/nlp/b.irving/aur_ppo/src/')
 from robot_ppo import robot_ppo
+#from robot_ppo_cython import robot_ppo
 import os, sys, argparse, time
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,19 +29,30 @@ def plot_curves(arr_list, legend_list, x_indices, color_list, ylabel, fig_title)
 
 if __name__=='__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_stacking')
+	parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_in_bowl')
 	parser.add_argument('-s', '--seed', type=float, help='Seed for experiment', default=1.0)
-	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
 	parser.add_argument('-gae', '--gae', type=bool, help='Generalized Advantage Estimation flag', default=True)
-	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=500000)
-	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
-	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
-	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=4)
-	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=5)
-	parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
+
+	# ----- TIME -----
+	parser.add_argument('-ns', '--num_steps', type=int, help='Number of steps that the environment should take', default=128)
+	parser.add_argument('-t', '--total_timesteps', type=int, help='Total number of timesteps that we will take', default=50000)
+	parser.add_argument('-ue', '--num_update_epochs', type=int, help='The  number of update epochs for the policy', default=10)
+	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
+	parser.add_argument('-pts', '--pretrain_steps', type=int, help='Number of pretraining steps', default=5000)
+	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
+
+	# ----- Variables to change ------
+	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
+	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=3e-4)
 	parser.add_argument('-ec', '--entropy_coeff', type=float, help='Coefficient for entropy', default=0.01)
 	parser.add_argument('-vf', '--value_coeff', type=float, help='Coefficient for values', default=0.5)
-	parser.add_argument('-cf', '--clip_coeff', type=float, help="the surrogate clipping coefficient",  default=0.2)
+	parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
+	# a lot?
+	parser.add_argument('-expw', '--expert_weight', type=float, help='How much do we want the expert trajectory to contribute?', default=0.9)
+
+	parser.add_argument('-al', '--anneal_lr', type=bool, help='How to anneal our learning rate', default=True)
+	parser.add_argument('-gl', '--gae_lambda', type=float, help="the lambda for the general advantage estimation", default=0.95)
+	parser.add_argument('-ne', '--num_envs', type=int, help='Number of environments to run in our vectorized setup', default=5)
 	parser.add_argument('-cvl', '--clip_vloss', type=bool, help="Clip the value loss", default=True)
 	parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
 	parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
@@ -46,30 +60,16 @@ if __name__=='__main__':
 	parser.add_argument('-p', '--capture_video', type=bool, help='Whether to capture the video or not', default=False)
 	parser.add_argument('-d', '--hidden_dim', type=int, help='Hidden dimension of the neural networks in the actor critic', default=64)
 	parser.add_argument('-c', '--continuous', type=bool, help='Is the action space continuous',default=True)
-	parser.add_argument('-lr', '--learning_rate', type=float, help='Learning rate for our agent', default=2.5e-4)
 	parser.add_argument('-exp', '--exp_name', type=str, help='Experiment name', default='close_loop_block_pulling')
 	parser.add_argument('-nl', '--num_layers', type=int, help='The number of layers in our actor and critic', default=2)
 	parser.add_argument('-do', '--dropout', type=float, help='Dropout in our actor and critic', default=0.0)
 	parser.add_argument('-g', '--gamma', type=float, help='Discount value for rewards', default=0.99)
 	parser.add_argument('-tr', '--track', type=bool, help='Track the performance of the environment', default=False)
 	parser.add_argument('-tri', '--trials', type=int, help='Number of trials to run', default=1)
-	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=True)
-	parser.add_argument('-pte', '--pretrain_episodes', type=int, help='Number of pretraining episodes', default=100)
-	parser.add_argument('-ptb', '--pretrain_batch_size', type=int, help='The size of our pretrain batch', default=8)
-	parser.add_argument('-expw', '--expert_weight', type=float, help='How much do we want the expert trajectory to contribute?', default=0.1)
+	parser.add_argument('-eq', '--equivariant', type=bool, help='Run the robot with equivariant networks, or not', default=False)
 	parser.add_argument('-anexp', '--anneal_exp', type=bool, help='Do we want to anneal the expert weight?', default=False)
 	parser.add_argument('-sfp', '--save_file_path', type=str, help='Where to save model to', default=None)
 	args = parser.parse_args()
-
-	# using mujoco parameters from open ai baselines
-	if(args.continuous):
-		args.learning_rate = 3e-4
-		args.num_envs = 5 
-		args.total_timesteps = 500000 
-		args.num_steps = 100
-		args.num_minibatches = 32
-		args.num_update_epochs = 10
-		args.entropy_coeff = 0
 
 	params = {
 		'gym_id':args.gym_id,
@@ -101,6 +101,7 @@ if __name__=='__main__':
 		'track':args.track,
 		'equivariant':args.equivariant,
 		'pretrain_episodes':args.pretrain_episodes,
+		'pretrain_steps':args.pretrain_steps,
 		'pretrain_batch_size':args.pretrain_batch_size,
 		'expert_weight':args.expert_weight,
 		'anneal_exp':args.anneal_exp,

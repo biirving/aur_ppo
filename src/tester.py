@@ -5,10 +5,7 @@ import numpy as np
 from nets.base_cnns import base_critic, base_actor
 from models import robot_actor_critic
 
-what = torch.tensor([0, 0])
-if what.sum():
-       print('True')
-"""
+
 class store_returns():
 	def __init__(self, num_envs, gamma):
 		self.gamma = gamma
@@ -34,14 +31,14 @@ env_config={'workspace': np.array([[ 0.25,  0.65],
 planner_config={'random_orientation': True, 'dpos': 0.02, 'drot': 0.19634954084936207}
 envs = EnvWrapper(num_processes, simulator, env, env_config, planner_config)
 
-device = torch.device('cuda')
+device = torch.device('cpu')
 test = robot_actor_critic(device, True)
 episodes = store_returns(num_processes, 0.99)
 state, obs = envs.reset()
 for index in tqdm(range(10000)):
        act = envs.getNextAction()
        unscaled, scaled = test.getActionFromPlan(act)
-       next_state, next_obs, reward, done = envs.step(scaled, auto_reset=True)
+       next_state, next_obs, reward, done = envs.step(unscaled, auto_reset=True)
        for i, rew in enumerate(reward):
               episodes.add_value(i, rew)
        for i, d in enumerate(done):
@@ -49,7 +46,7 @@ for index in tqdm(range(10000)):
                      discounted_return, episode_length = episodes.calc_discounted_return(i)
                      print(discounted_return)
                      print(episode_length)
-"""
+
 
 """
 device = torch.device('cuda')
