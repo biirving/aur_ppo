@@ -18,3 +18,41 @@ To run the PPO algorithm on the close_loop_block_picking BulletARM environment w
 python robot_run.py --gym_id='close_loop_block_picking' --continuous=True --equivariant=True
 ```
 
+## Cite
+
+BulletArm
+```
+@misc{https://doi.org/10.48550/arxiv.2205.14292,
+      doi = {10.48550/ARXIV.2205.14292},
+      url = {https://arxiv.org/abs/2205.14292},
+      author = {Wang, Dian and Kohler, Colin and Zhu, Xupeng and Jia, Mingxi and Platt, Robert},
+      keywords = {Robotics (cs.RO), FOS: Computer and information sciences, FOS: Computer and information sciences},
+      title = {BulletArm: An Open-Source Robotic Manipulation Benchmark and Learning Framework},
+      publisher = {arXiv},
+      year = {2022},
+      copyright = {arXiv.org perpetual, non-exclusive license}
+}
+```
+
+Proximal Policy Optimization
+
+```
+@article{DBLP:journals/corr/SchulmanWDRK17,
+  author       = {John Schulman and
+                  Filip Wolski and
+                  Prafulla Dhariwal and
+                  Alec Radford and
+                  Oleg Klimov},
+  title        = {Proximal Policy Optimization Algorithms},
+  journal      = {CoRR},
+  volume       = {abs/1707.06347},
+  year         = {2017},
+  url          = {http://arxiv.org/abs/1707.06347},
+  eprinttype    = {arXiv},
+  eprint       = {1707.06347},
+  timestamp    = {Mon, 13 Aug 2018 16:47:34 +0200},
+  biburl       = {https://dblp.org/rec/journals/corr/SchulmanWDRK17.bib},
+  bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+```
+
