@@ -1,2 +1,3 @@
 # aur_ppo
-Proximal policy optimization
+
+The following repository contains code for Equivariant Proximal Policy Optimization (PPO). 
