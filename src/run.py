@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import torch
 from ppo import ppo
-from robot_ppo import robot_ppo
+#from robot_ppo import robot_ppo
 import os, sys, argparse, time
 import matplotlib.pyplot as plt
 import numpy as np

@@ -7,6 +7,7 @@ import time
 from models import robot_actor_critic
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import sys, os, time
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -15,8 +16,7 @@ from env_wrapper import EnvWrapper
 from torch.distributions import Normal, Categorical
 import collections
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-#device = torch.device('cpu')
+device = torch.device('cpu')
 
 class torch_buffer():
 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
@@ -26,8 +26,6 @@ class torch_buffer():
 		self.states = torch.zeros((num_steps, num_envs))
 		self.observations = torch.zeros((num_steps, num_envs) + observation_shape)
 		self.actions = torch.zeros((num_steps, num_envs, action_shape))
-		# to store the actions from the expert rollout
-		self.true_actions = torch.zeros((num_steps, num_envs, action_shape))
 		self.log_probs = torch.zeros((num_steps, num_envs, action_shape))
 		self.rewards = torch.zeros((num_steps, num_envs))
 		self.terminals = torch.zeros((num_steps, num_envs))
@@ -41,7 +39,6 @@ class torch_buffer():
 		self.rewards = self.rewards.to(device)
 		self.terminals = self.terminals.to(device)
 		self.values = self.values.to(device)
-		self.true_actions = self.true_actions.to(device)
 
 	def load_to_cpu(self):
 		self.states = self.states.to('cpu')
@@ -51,19 +48,22 @@ class torch_buffer():
 		self.rewards = self.rewards.to('cpu')
 		self.terminals = self.terminals.to('cpu')
 		self.values = self.values.to('cpu')
-		self.true_actions.to('cpu')
 	
+		
+	# flatten the buffer values for evaluation
 	def flatten(self, returns, advantages):
 		b_states = self.states.view(self.states.shape[0] * self.states.shape[1])
 		b_obs = self.observations.view(self.observations.shape[0] * self.observations.shape[1], 
 								 self.observations.shape[2], self.observations.shape[3], self.observations.shape[4])
 		b_logprobs = self.log_probs.reshape(-1)
 		b_actions = self.actions.view(self.actions.shape[0] * self.actions.shape[1], self.actions.shape[2])
-		b_true_actions = self.true_actions.view(self.true_actions.shape[0] * self.true_actions.shape[1], self.true_actions.shape[2])
 		b_advantages = advantages.reshape(-1)
 		b_returns = returns.reshape(-1)
 		b_values = self.values.reshape(-1)
-		return (b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values, b_true_actions)
+		return (b_states, b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values)
+
+# How are we going to use the expert action to step through?
+PRETRAIN = collections.namedtuple('pretrain', 'state obs action reward done')
 
 # simple class for plotting in this environment
 class store_returns():
@@ -151,13 +151,13 @@ class robot_ppo():
 
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.pretrain_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.learning_rate, eps=1e-5)
-		self.scaler = torch.cuda.amp.GradScaler()
 		self.total_returns = []
 		self.total_episode_lengths = []
 		self.x_indices = []
 		self.episodic_returns = store_returns(self.num_envs, self.gamma)
 
 	def rewards_to_go(self, step, next_state, next_obs, global_step, writer):
+		#next_obs = self.normalizeTransition(next_obs)
 		with torch.no_grad():
 			actions, unscaled, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device))
 			if(self.equivariant):
@@ -166,13 +166,11 @@ class robot_ppo():
 				self.buffer.values[step] = value.flatten()
 		self.buffer.actions[step] = unscaled 
 		self.buffer.log_probs[step] = logprob
-		self.buffer.true_actions[step] = self.envs.getNextAction()
 
 		#self.buffer.true_actions[step] = true_actions
 		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
-
 		self.buffer.rewards[step] = reward.view(-1)
 		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		for i, d in enumerate(done):
@@ -183,23 +181,23 @@ class robot_ppo():
 				break
 		return next_states, next_obs, next_done
 
-
-	# behaviour cloning?
-	def expert_rollout(self, step, state, obs):
+	def expert_rollout(self, step, next_state, next_obs):
+		#next_obs = self.normalizeTransition(next_obs)
 		with torch.no_grad():
 			true_action = self.envs.getNextAction()
 			unscaled, scaled = self.policy.getActionFromPlan(true_action)
-			_, unscaled_agent, logprob, _, value = self.policy.evaluate(state.to(device), obs.to(device))
-			# to store for mse loss
-			self.pretrain_buffer.actions[step] = unscaled_agent
+			# how else to get the log probability and the value?
+			# use our unscaled action to generate our log probability
+			_, _, logprob, _, value = self.policy.evaluate(next_state.to(device), next_obs.to(device), action=unscaled.to(device))
 
 			if(self.equivariant):
 				self.pretrain_buffer.values[step] = value.tensor.detach().flatten()
 			else:
 				self.pretrain_buffer.values[step] = value.detach().flatten()
-
-		self.pretrain_buffer.true_actions[step] = unscaled 
+		self.pretrain_buffer.actions[step] = unscaled 
 		self.pretrain_buffer.log_probs[step] = logprob
+
+		#self.buffer.true_actions[step] = true_actions
 		next_states, next_obs, reward, done = self.envs.step(scaled, auto_reset=True)
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
@@ -254,6 +252,12 @@ class robot_ppo():
 				returns, advantages = self.normal_advantage(next_value, next_done, buffer, num_steps)
 		return returns, advantages
 
+	def normalizeTransition(self, obs):
+		#obs = torch.clip(obs, 0, 0.32)
+		#obs = obs/0.4*255
+		#obs = obs.to(torch.uint8)
+		return obs.to(device)
+	
 	# Fill out the pretrain buffer 
 	def pretrain(self):
 		"""
@@ -268,9 +272,9 @@ class robot_ppo():
 			state, obs, done = self.expert_rollout(step, state, obs)
 		return state.to(device), obs.to(device), done.to(device)
 
-	def update(self, buffer, update_epochs, batch_size, minibatch_size, policy_losses, pretrain=False):
+	def update(self, buffer, update_epochs, batch_size, minibatch_size, policy_losses):
 		(b_states, b_obs, b_logprobs, b_actions, 
-			b_advantages, b_returns, b_values, b_true_actions) = buffer 
+			b_advantages, b_returns, b_values) = buffer 
 
 		b_inds = np.arange(batch_size)
 		clip_fracs = []
@@ -293,7 +297,6 @@ class robot_ppo():
 
 				# we normalize at the minibatch level
 				mb_advantages = b_advantages[mb_inds]
-
 				# 1e-8 avoids division by 0
 				if self.norm_adv:
 					mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
@@ -324,21 +327,11 @@ class robot_ppo():
 					value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
 
 				# Data Aggregation 
-				entropy_loss = entropy.mean()
-				if(pretrain):
-					# the simple mse loss between the proposed actions from the arm and the "true" actions
-					expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
-					# the expert weight should anneal over time, approaching zero?
-					# if using it in the normal training step
-					#loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff + self.expert_weight * expert_loss
-					# How the carnigie melon paper does the behavior cloning pretraining
-					loss = self.expert_weight * expert_loss
-				else:
-					# also, should I have the expert weight and loss throughout entire training loop?
-					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff	
+				#expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(true), b_true_actions[mb_inds])
 
-				# scale the datatype automatically 
-				#with torch.autocast(device_typ="cuda", dtype=torch.float16)
+				entropy_loss = entropy.mean()
+				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff #+ self.expert_weight * expert_loss
+
 				self.optimizer.zero_grad()
 				loss.backward()
 				nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
@@ -354,8 +347,7 @@ class robot_ppo():
 	def train(self):
 		if self.track:
 			import wandb
-			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.gym_id + '_' + str(self.learning_rate) + '_' + 
-			str(self.value_coeff) + '_' + str(self.entropy_coeff) + '_' + str(self.clip_coeff) + '_' + str(self.num_minibatches),monitor_gym=True,save_code=True)
+			wandb.init(project='ppo',entity='Aurelian',sync_tensorboard=True,config=None,name=self.gym_id,monitor_gym=True,save_code=True)
 		writer = SummaryWriter(f"runs/{self.gym_id}")
 		writer.add_text("parameters/what", "what")
 		writer.add_text(
@@ -382,7 +374,7 @@ class robot_ppo():
 		# load our pretrain buffer onto the device
 		flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
 		# update the weights of the network based on the results of the pretrain buffer
-		self.update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, pretrain_policy_losses, pretrain=True)
+		self.update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, pretrain_policy_losses)
 
 		# then offload the pretrain buffer from the device
 		self.pretrain_buffer.load_to_cpu()
@@ -407,15 +399,15 @@ class robot_ppo():
 				frac = 1 - ((update - 1)/self.num_updates)
 				self.expert_weight *= frac
 
-			# For some portion of the episodes, we could have the expert rollout the 'expert' actions
+			# I think that the expert episodes should be integrated into this loop?
 			for step in tqdm(range(0, self.num_steps)):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_state
 				self.buffer.observations[step] = next_obs
 				self.buffer.terminals[step] = next_done
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
-
-			# should we do expert rollout in the same manner?	
+			
+			# for dataset aggregation, we have a separate 
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.buffer, self.num_steps)
 			buffer = self.buffer.flatten(returns, advantages)
 
@@ -431,7 +423,6 @@ class robot_ppo():
 			y_pred, y_true = buffer[6].cpu().numpy(), buffer[5].cpu().numpy()
 			var_y = np.var(y_true)
 			explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-
 
 			writer.add_scalar("charts/learning_rate", self.optimizer.param_groups[0]["lr"], global_step)
 			writer.add_scalar("losses/value_loss", value_loss.item(), global_step)
