@@ -56,3 +56,26 @@ Proximal Policy Optimization
 }
 ```
 
+Equivariant Reinforcement Learning
+
+```
+@inproceedings{
+wang2022so2equivariant,
+title={{$\mathrm{SO}(2)$}-Equivariant Reinforcement Learning},
+author={Dian Wang and Robin Walters and Robert Platt},
+booktitle={International Conference on Learning Representations},
+year={2022},
+url={https://openreview.net/forum?id=7F9cOhdvfk_}
+}
+```
+```
+@inproceedings{
+wang2022onrobot,
+title={On-Robot Learning With Equivariant Models},
+author={Dian Wang and Mingxi Jia and Xupeng Zhu and Robin Walters and Robert Platt},
+booktitle={6th Annual Conference on Robot Learning},
+year={2022},
+url={https://openreview.net/forum?id=K8W6ObPZQyh}
+}
+```
+
