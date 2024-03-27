@@ -1,7 +1,7 @@
 import torch
 from torch import nn, tensor
 from nets.equiv import EquivariantActor, EquivariantCritic
-from nets.base_cnns import base_actor, base_critic
+from nets.base_cnns import base_actor, base_critic, base_encoder
 
 from torch.distributions import Normal, Categorical
 import numpy as np
@@ -9,6 +9,12 @@ import sys
 
 epsilon = 1e-6
 
+def weights_init(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Conv2d):
+        nn.init.xavier_normal_(m.weight.data)
 # an implementation of the actor-critic 
 class robot_actor_critic(nn.Module):
 	def __init__(self, device, 
@@ -28,10 +34,20 @@ class robot_actor_critic(nn.Module):
 			self.actor = EquivariantActor().to(device)
 			self.critic = EquivariantCritic().to(device)
 		else:
-			self.actor = base_actor().to(device)
+			# we could also try to combine the parameters of the actor and the critic
+			# I think we should do this. There is nothing inherently wrong with our implementation
+			# And I would just have to add a bunch of functionality from here anyways
+			# so create a single cnn decoder, and pop two different layers on for each 
+			self.network = base_encoder(obs_shape=(2, 128, 128), out_dim=128) 
+			self.actor = nn.Linear(128, 5)
+			self.actor.apply(weights_init)
 			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(5)))
-			self.critic = base_critic().to(device)
-		# Use a vision transformer instead of the CNN?
+			self.critic = torch.nn.Sequential(
+				torch.nn.Linear(128, 128),
+				nn.ReLU(inplace=True),
+				torch.nn.Linear(128, 1)
+			)
+			self.critic.apply(weights_init)
 		
 	def forward(self, act):
 		pass
@@ -39,7 +55,7 @@ class robot_actor_critic(nn.Module):
 	def value(self, state, obs):
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		return self.critic(cat_obs)
+		return self.critic(self.network(cat_obs))
 
 	# courtesy of Dian Wang
 	def decodeActions(self, *args):
@@ -83,36 +99,34 @@ class robot_actor_critic(nn.Module):
 		else:
 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
 
-
 	def evaluate(self, state, obs, action=None):
+		# so the state is whether the gripper is open or closed
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
 		
 		if(self.equivariant):
-			action_mean, action_logstd = self.actor(cat_obs)
+			action_mean, action_logstd = self.actor(self.network(cat_obs))
 		else:
-			action_mean = self.actor(cat_obs)
+			action_mean = self.actor(self.network(cat_obs))
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 
 		action_std = torch.exp(action_logstd)
-		
 		dist = Normal(action_mean, action_std)
 
 		if action is None:
 			action = dist.rsample()
 
-		action = torch.tanh(action)
+		#action = torch.tanh(action)
 		log_prob = dist.log_prob(action)
 
 		# clipping the log probability
-		log_prob -= torch.log((1 - action.pow(2)) + epsilon)
-		log_prob = log_prob.sum(1, keepdim=True)
+		#log_prob -= torch.log((1 - action.pow(2)) + epsilon)
+		#log_prob = log_prob.sum(1, keepdim=True)
 
 		#action_mean = torch.tanh(action_mean)
 		entropy = dist.entropy()		
 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
-
+		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(self.network(obs))
 
 	# pretrain the actor alone
 	def evaluate_pretrain(self, state, obs, action=None):
@@ -121,15 +135,13 @@ class robot_actor_critic(nn.Module):
 		if(self.equivariant):
 			action_mean, action_logstd = self.actor(cat_obs)
 		else:
-			action_mean = self.actor(cat_obs)
+			action_mean = self.actor(self.network(cat_obs))
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 		action_std = torch.exp(action_logstd)
 		dist = Normal(action_mean, action_std)
 		if action is None:
-			# we don't want two different action tensors
 			action = dist.rsample()
 		action = torch.tanh(action)
 		action_mean = torch.tanh(action_mean)
 		unscaled_action, action = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
 		return action.to(torch.float16), unscaled_action.to(torch.float16)
-

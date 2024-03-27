@@ -17,6 +17,10 @@ import collections
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
+
+
+# so why doesn't this work at all?
+
 class torch_buffer():
 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
 		self.state_shape = state_shape
@@ -112,17 +116,17 @@ class robot_ppo():
 		# config used in Dian, Rob, and Robin's paper
 		env_config={'workspace': np.array([[ 0.25,  0.65],
 			[-0.2 ,  0.2 ],
-			[ 0.01,  0.25]]), 'max_steps': 250, 
+			[ 0.01,  0.25]]), 'max_steps': 100, 
 			'obs_size': 128, 
 			'fast_mode': True, 
 			'action_sequence': 'pxyzr', 
-			'render': False, 
+			'render': True, 
 			'num_objects': 2, 
 			'random_orientation': True, 
 			'robot': 'kuka', 
 			'workspace_check': 'point', 
 			'object_scale_range': (1, 1), 
-			'hard_reset_freq': 1000, 
+			'hard_reset_freq': 100, 
 			'physics_mode': 'fast', 
 			'view_type': 'camera_center_xyz', 
 			'obs_type': 'pixel', 
@@ -134,6 +138,7 @@ class robot_ppo():
 		self.plot_index = 0 
 		
 		self.policy = robot_actor_critic(device, self.equivariant).to(device)
+		self.expert = robot_actor_critic(device, self.equivariant).to(device)
 
 		self.action_dim = 5
 		self.state_dim = 1 
@@ -145,7 +150,8 @@ class robot_ppo():
 		self.pretrain_buffer = torch_buffer(self.state_dim, (1, 128, 128), self.action_dim, self.pretrain_steps, self.num_envs)
 
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
-		self.pretrain_optimizer = torch.optim.Adam(self.policy.actor.parameters(), lr=self.learning_rate, eps=1e-5)
+
+		self.pretrain_optimizer = torch.optim.Adam(self.expert.actor.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.scaler = torch.cuda.amp.GradScaler()
 		self.total_returns = []
 		self.total_episode_lengths = []
@@ -161,33 +167,36 @@ class robot_ppo():
 				self.buffer.values[step] = value.flatten()
 		self.buffer.actions[step] = unscaled 
 		self.buffer.log_probs[step] = logprob
-		self.buffer.true_actions[step] = self.envs.getNextAction()
-
-		#self.buffer.true_actions[step] = true_actions
+		# the true action
+		# the gradients of the expert should not be stored?
+		with torch.no_grad():	
+			_, true_action, _, _, _ = self.expert.evaluate(next_state.to(device), next_obs.to(device))
+		self.buffer.true_actions[step] = true_action 
 		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
+		print('next state', next_states.shape)
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
-
 		self.buffer.rewards[step] = reward.view(-1)
 		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		for i, d in enumerate(done):
 			if d:
 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
+				print('Episode length', episode_length)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
 				break
 		return next_states, next_obs, next_done
 
 
-	# behaviour cloning?
+	# should we pretrain this policy with data augmentation as well?
 	def expert_rollout(self, step, state, obs):
 		with torch.no_grad():
 			true_action = self.envs.getNextAction()
-			unscaled, scaled = self.policy.getActionFromPlan(true_action)
-			_, unscaled_agent, logprob, _, value = self.policy.evaluate(state.to(device), obs.to(device))
+			unscaled, scaled = self.expert.getActionFromPlan(true_action)
+			scaled_agent, unscaled_agent, logprob, _, value = self.expert.evaluate(state.to(device), obs.to(device))
 			# to store for mse loss
-			self.pretrain_buffer.actions[step] = unscaled_agent
-
+			# why use the unscaled action?
+			self.pretrain_buffer.actions[step] = unscaled_agent 
 			if(self.equivariant):
 				self.pretrain_buffer.values[step] = value.tensor.detach().flatten()
 			else:
@@ -195,6 +204,7 @@ class robot_ppo():
 
 		self.pretrain_buffer.true_actions[step] = unscaled 
 		self.pretrain_buffer.log_probs[step] = logprob
+
 		next_states, next_obs, reward, done = self.envs.step(scaled, auto_reset=True)
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
@@ -262,7 +272,24 @@ class robot_ppo():
 			state, obs, done = self.expert_rollout(step, state, obs)
 		return state.to(device), obs.to(device), done.to(device)
 
-	def update(self, buffer, update_epochs, batch_size, minibatch_size, policy_losses, pretrain=False):
+	def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size):
+		b_inds = np.arange(batch_size)
+		(b_states, b_obs, b_logprobs, b_actions, 
+			b_advantages, b_returns, b_values, b_true_actions) = buffer 
+		for ep in range(update_epochs):
+			np.random.shuffle(b_inds)
+			for index in range(0, batch_size, minibatch_size):
+				mb_inds = b_inds[index:index+self.minibatch_size]
+				expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
+				self.pretrain_optimizer.zero_grad()
+				loss = self.expert_weight * expert_loss
+				loss.backward()
+				nn.utils.clip_grad_norm_(self.expert.actor.parameters(), self.max_grad_norm)
+				self.pretrain_optimizer.step()
+
+	def update(self, buffer, update_epochs, batch_size, minibatch_size, policy_losses):
+		assert minibatch_size != 0
+
 		(b_states, b_obs, b_logprobs, b_actions, 
 			b_advantages, b_returns, b_values, b_true_actions) = buffer 
 
@@ -270,6 +297,7 @@ class robot_ppo():
 		clip_fracs = []
 		for ep in range(update_epochs):
 			np.random.shuffle(b_inds)
+			self.optimizer.zero_grad()
 			for index in range(0, batch_size, minibatch_size):
 				mb_inds = b_inds[index:index+self.minibatch_size]
 				
@@ -293,8 +321,8 @@ class robot_ppo():
 					mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
 
 				loss_one = -mb_advantages * ratio
-			
 				loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
+
 				policy_loss = torch.max(loss_one, loss_two).mean()
 				policy_losses.append(policy_loss.item())
 
@@ -304,6 +332,7 @@ class robot_ppo():
 				else:
 					newvalue = newvalue.view(-1)
 
+				entropy_loss = entropy.mean()
 				if self.clip_vloss:
 					v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
 					v_clipped = b_values[mb_inds] + torch.clamp(
@@ -316,27 +345,24 @@ class robot_ppo():
 					value_loss = 0.5 * v_loss_max.mean()
 				else:
 					value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
+				# this should just be added above
+				value_loss *= self.value_coeff
 
-				# Data Aggregation 
-				entropy_loss = entropy.mean()
-				if(pretrain):
-					# the simple mse loss between the proposed actions from the arm and the "true" actions
-					expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
-					#loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff + self.expert_weight * expert_loss
-					loss = self.expert_weight * expert_loss
-				else:
-					# also, should I have the expert weight and loss throughout entire training loop?
-					loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss * self.value_coeff	
+				# change this to be the KL divergence
+				# they use a lagrangian equation to optimize
+				expert_loss = nn.functional.kl_div(b_actions[mb_inds], b_true_actions[mb_inds])
+				#expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
+				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss + self.expert_weight * expert_loss
 
-				self.optimizer.zero_grad()
 				loss.backward()
-				nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+				nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.max_grad_norm)
 				self.optimizer.step()
+				self.optimizer.zero_grad()
+
 			if self.target_kl is not None:
 				if approx_kl > self.target_kl:
 					break
 		return (policy_loss, value_loss, entropy_loss, old_approx_kl, approx_kl, clip_fracs)
-
 
 
 	#@profile
@@ -358,24 +384,19 @@ class robot_ppo():
 		torch.manual_seed(seed)
 		torch.backends.cudnn.deterministic = True 
 
-
-		print('Pretraining...')
-		self.policy.train()
-		# Populate the pretrain buffer
-		pretrain_policy_losses = []
-		next_state, next_obs, next_done = self.pretrain()
-		self.pretrain_buffer.load_to_device()
-		returns, advantages = self.advantages(next_state, next_obs, next_done, self.pretrain_buffer, self.pretrain_steps)
-		returns = returns.to(device)
-		advantages = advantages.to(device)
-		# load our pretrain buffer onto the device
-		flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
-		# update the weights of the network based on the results of the pretrain buffer
-		self.update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, pretrain_policy_losses, pretrain=True)
-
-		# then offload the pretrain buffer from the device
-		self.pretrain_buffer.load_to_cpu()
-		print('Pretraining complete')
+		if self.do_pretraining:
+			print('Pretraining...')
+			self.policy.train()
+			# Populate the pretrain buffer
+			next_state, next_obs, next_done = self.pretrain()
+			self.pretrain_buffer.load_to_device()
+			returns, advantages = self.advantages(next_state, next_obs, next_done, self.pretrain_buffer, self.pretrain_steps)
+			returns = returns.to(device)
+			advantages = advantages.to(device)
+			flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
+			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size)
+			self.pretrain_buffer.load_to_cpu()
+			print('Pretraining complete')
 
 		global_step = 0
 		start_time = time.time()
@@ -390,13 +411,11 @@ class robot_ppo():
 				frac = 1.0 - (update - 1.0) / self.num_updates
 				lrnow = frac * self.learning_rate
 				self.optimizer.param_groups[0]["lr"] = lrnow
-
 			# we want to anneal the expert weight as well
 			if self.anneal_exp:
 				frac = 1 - ((update - 1)/self.num_updates)
 				self.expert_weight *= frac
 
-			# For some portion of the episodes, we could have the expert rollout the 'expert' actions
 			for step in tqdm(range(0, self.num_steps)):
 				global_step += 1 * self.num_envs
 				self.buffer.states[step] = next_state
@@ -404,7 +423,6 @@ class robot_ppo():
 				self.buffer.terminals[step] = next_done
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
 
-			# should we do expert rollout in the same manner?	
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.buffer, self.num_steps)
 			buffer = self.buffer.flatten(returns, advantages)
 
@@ -420,7 +438,6 @@ class robot_ppo():
 			y_pred, y_true = buffer[6].cpu().numpy(), buffer[5].cpu().numpy()
 			var_y = np.var(y_true)
 			explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-
 
 			writer.add_scalar("charts/learning_rate", self.optimizer.param_groups[0]["lr"], global_step)
 			writer.add_scalar("losses/value_loss", value_loss.item(), global_step)
