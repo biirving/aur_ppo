@@ -86,6 +86,8 @@ class store_returns():
 		return R, len_episode
 
 class robot_ppo():
+
+	# move the decode actions and get actions from plan into here
 	def __init__(self, params):
 		# accessing through the dictionary is slower
 		self.params_dict = params
@@ -109,7 +111,6 @@ class robot_ppo():
 		self.total_pretrain_steps = self.pretrain_steps * self.num_envs
 		self.pretrain_minibatch_size = int(self.total_pretrain_steps // self.pretrain_batch_size)
 
-
 		num_eval_processes=5
 		simulator='pybullet'
 		env=self.gym_id
@@ -120,7 +121,7 @@ class robot_ppo():
 			'obs_size': 128, 
 			'fast_mode': True, 
 			'action_sequence': 'pxyzr', 
-			'render': True, 
+			'render': self.render, 
 			'num_objects': 2, 
 			'random_orientation': True, 
 			'robot': 'kuka', 
@@ -133,6 +134,7 @@ class robot_ppo():
 			'view_scale': 1.5, 
 			'transparent_bin': True}
 		planner_config={'random_orientation': True, 'dpos': 0.02, 'drot': 0.19634954084936207}
+
 		self.envs = EnvWrapper(self.num_envs, simulator, env, env_config, planner_config)
 		self.eval_envs = EnvWrapper(num_eval_processes, simulator, env, env_config, planner_config)
 		self.plot_index = 0 
@@ -170,10 +172,16 @@ class robot_ppo():
 		# the true action
 		# the gradients of the expert should not be stored?
 		with torch.no_grad():	
-			_, true_action, _, _, _ = self.expert.evaluate(next_state.to(device), next_obs.to(device))
+			true_action = self.envs.getNextAction()
+			true_action, scaled = self.policy.getActionFromPlan(true_action)
+			#_, true_action, _, _, _ = self.policy.evaluate(next_state.to(device), next_obs.to(device))
 		self.buffer.true_actions[step] = true_action 
-		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
-		print('next state', next_states.shape)
+		next_states, next_obs, reward, done, dist = self.envs.step(actions)
+		print('distance', dist)
+		# more negative rewards for greater distances
+		# the normalized tensor?
+		reward =- torch.tensor(dist)
+    	#return np.linalg.norm(np.array(gripper_pos) - np.array(obj_pos)) < 0.03
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
 		self.buffer.rewards[step] = reward.view(-1)
@@ -181,7 +189,7 @@ class robot_ppo():
 		for i, d in enumerate(done):
 			if d:
 				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
-				print('Episode length', episode_length)
+				#print('Episode length', episode_length)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
 				break
@@ -192,8 +200,9 @@ class robot_ppo():
 	def expert_rollout(self, step, state, obs):
 		with torch.no_grad():
 			true_action = self.envs.getNextAction()
-			unscaled, scaled = self.expert.getActionFromPlan(true_action)
-			scaled_agent, unscaled_agent, logprob, _, value = self.expert.evaluate(state.to(device), obs.to(device))
+			# the actions from the policy
+			unscaled, scaled = self.policy.getActionFromPlan(true_action)
+			scaled_agent, unscaled_agent, logprob, _, value = self.policy.evaluate(state.to(device), obs.to(device))
 			# to store for mse loss
 			# why use the unscaled action?
 			self.pretrain_buffer.actions[step] = unscaled_agent 
@@ -204,13 +213,10 @@ class robot_ppo():
 
 		self.pretrain_buffer.true_actions[step] = unscaled 
 		self.pretrain_buffer.log_probs[step] = logprob
-
-		next_states, next_obs, reward, done = self.envs.step(scaled, auto_reset=True)
-		for i, rew in enumerate(reward):
-			self.episodic_returns.add_value(i, rew)
+		next_states, next_obs, reward, done, dist = self.envs.step(scaled, auto_reset=True)
 		self.pretrain_buffer.rewards[step] = reward.view(-1)
 		next_states, next_obs, next_done = next_states, next_obs, done
-		return next_states, next_obs, next_done
+		return next_states, next_obs, next_done, dist
 
 	def run_gae(self, next_value, next_done, buffer, num_steps):
 		advantages = torch.zeros_like(buffer.rewards)
@@ -265,27 +271,50 @@ class robot_ppo():
 		"""
 		state, obs = self.envs.reset()
 		done = torch.zeros(self.num_envs).to(device)
+		dists = []
 		for step in tqdm(range(0, self.pretrain_steps)):
 			self.pretrain_buffer.states[step] = state
 			self.pretrain_buffer.observations[step] = obs
 			self.pretrain_buffer.terminals[step] = done 
-			state, obs, done = self.expert_rollout(step, state, obs)
-		return state.to(device), obs.to(device), done.to(device)
+			state, obs, done, dist = self.expert_rollout(step, state, obs)
+			dists.append(dist)
+		return state.to(device), obs.to(device), done.to(device), dists
 
-	def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size):
+	def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size, dists):
 		b_inds = np.arange(batch_size)
 		(b_states, b_obs, b_logprobs, b_actions, 
 			b_advantages, b_returns, b_values, b_true_actions) = buffer 
+		print(len(dists))
 		for ep in range(update_epochs):
 			np.random.shuffle(b_inds)
 			for index in range(0, batch_size, minibatch_size):
 				mb_inds = b_inds[index:index+self.minibatch_size]
-				expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])
-				self.pretrain_optimizer.zero_grad()
-				loss = self.expert_weight * expert_loss
-				loss.backward()
-				nn.utils.clip_grad_norm_(self.expert.actor.parameters(), self.max_grad_norm)
-				self.pretrain_optimizer.step()
+				expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])#+ torch.tensor(sum(dists[mb_inds]))
+				self.optimizer.zero_grad()
+				#loss = #self.expert_weight * expert_loss
+				#loss = expert_loss
+				expert_loss.backward()
+				nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.max_grad_norm)
+				self.optimizer.step()
+
+	def test_env(self, writer):
+		test_returns = store_returns(self.num_envs, self.gamma)
+		with torch.no_grad():
+			num_eval_steps=100
+			state, obs = self.envs.reset()
+			for step in tqdm(range(num_eval_steps)):
+				# do we have auto_reset = true?
+				#u_a, a = self.expert.test_action(state.to(device), obs.to(device))
+				scaled_agent, unscaled_agent, logprob, _, value = self.policy.evaluate(state.to(device), obs.to(device))
+				state, obs, reward, done, dist = self.envs.step(scaled_agent, auto_reset=True)
+				for i, rew in enumerate(reward):
+					test_returns.add_value(i, rew)
+				for i, d in enumerate(done):
+					if d:
+						discounted_return, episode_length = test_returns.calc_discounted_return(i)
+						#print('Episode length', episode_length)
+						writer.add_scalar("charts/test_discounted_episodic_return", discounted_return, step)
+						writer.add_scalar("charts/test_episodic_length", episode_length, step)
 
 	def update(self, buffer, update_epochs, batch_size, minibatch_size, policy_losses):
 		assert minibatch_size != 0
@@ -350,8 +379,8 @@ class robot_ppo():
 
 				# change this to be the KL divergence
 				# they use a lagrangian equation to optimize
-				expert_loss = nn.functional.kl_div(b_actions[mb_inds], b_true_actions[mb_inds])
-				#expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
+				#expert_loss = nn.functional.kl_div(b_actions[mb_inds], b_true_actions[mb_inds])
+				expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
 				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss + self.expert_weight * expert_loss
 
 				loss.backward()
@@ -388,14 +417,15 @@ class robot_ppo():
 			print('Pretraining...')
 			self.policy.train()
 			# Populate the pretrain buffer
-			next_state, next_obs, next_done = self.pretrain()
+			next_state, next_obs, next_done, distances = self.pretrain()
 			self.pretrain_buffer.load_to_device()
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.pretrain_buffer, self.pretrain_steps)
 			returns = returns.to(device)
 			advantages = advantages.to(device)
 			flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
-			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size)
+			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, distances)
 			self.pretrain_buffer.load_to_cpu()
+			self.test_env(writer)
 			print('Pretraining complete')
 
 		global_step = 0

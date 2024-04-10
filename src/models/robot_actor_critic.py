@@ -39,14 +39,16 @@ class robot_actor_critic(nn.Module):
 			# And I would just have to add a bunch of functionality from here anyways
 			# so create a single cnn decoder, and pop two different layers on for each 
 			self.network = base_encoder(obs_shape=(2, 128, 128), out_dim=128) 
-			self.actor = nn.Linear(128, 5)
+			#self.actor = nn.Linear(128, 5)
+			self.actor = base_actor()
 			self.actor.apply(weights_init)
 			self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(5)))
-			self.critic = torch.nn.Sequential(
-				torch.nn.Linear(128, 128),
-				nn.ReLU(inplace=True),
-				torch.nn.Linear(128, 1)
-			)
+			#self.critic = torch.nn.Sequential(
+			#	torch.nn.Linear(128, 128),
+			#	nn.ReLU(inplace=True),
+			#	torch.nn.Linear(128, 1)
+			#)
+			self.critic = base_critic()
 			self.critic.apply(weights_init)
 		
 	def forward(self, act):
@@ -55,7 +57,7 @@ class robot_actor_critic(nn.Module):
 	def value(self, state, obs):
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		return self.critic(self.network(cat_obs))
+		return self.critic(cat_obs)
 
 	# courtesy of Dian Wang
 	def decodeActions(self, *args):
@@ -105,9 +107,9 @@ class robot_actor_critic(nn.Module):
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
 		
 		if(self.equivariant):
-			action_mean, action_logstd = self.actor(self.network(cat_obs))
+			action_mean, action_logstd = self.actor(cat_obs)
 		else:
-			action_mean = self.actor(self.network(cat_obs))
+			action_mean = self.actor(cat_obs)
 			action_logstd = self.actor_logstd.expand_as(action_mean)
 
 		action_std = torch.exp(action_logstd)
@@ -126,7 +128,7 @@ class robot_actor_critic(nn.Module):
 		#action_mean = torch.tanh(action_mean)
 		entropy = dist.entropy()		
 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
-		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(self.network(obs))
+		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
 
 	# pretrain the actor alone
 	def evaluate_pretrain(self, state, obs, action=None):
@@ -145,3 +147,11 @@ class robot_actor_critic(nn.Module):
 		action_mean = torch.tanh(action_mean)
 		unscaled_action, action = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
 		return action.to(torch.float16), unscaled_action.to(torch.float16)
+
+
+	def test_action(self, state, obs):
+		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
+		action_mean = self.actor(cat_obs)
+		mean = torch.tanh(action_mean)
+		return self.decodeActions(*[mean[:, i] for i in range(self.n_a)])

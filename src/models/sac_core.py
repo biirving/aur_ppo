@@ -7,9 +7,20 @@ import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
 
-from nets.equiv import EquivariantActor, EquivariantCritic
+from nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic
 from nets.base_cnns import base_actor, base_critic, base_encoder
 
+
+LOG_SIG_MAX = 2
+LOG_SIG_MIN = -20
+epsilon = 1e-6
+
+def weights_init(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Conv2d):
+        nn.init.xavier_normal_(m.weight.data)
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -32,62 +43,36 @@ LOG_STD_MIN = -20
 
 class SquashedGaussianMLPActor(nn.Module):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
+    def __init__(self, hidden_sizes, activation, 
+        dx=0.02, 
+        dy=0.02, 
+        dz=0.02, 
+        dr=np.pi/8, 
+        n_a=5, 
+        tau=0.001,):
         super().__init__()
+
+        self.p_range = torch.tensor([0, 1])
+        self.dtheta_range = torch.tensor([-dr, dr])
+        self.dx_range = torch.tensor([-dx, dx])
+        self.dy_range = torch.tensor([-dy, dy])
+        self.dz_range = torch.tensor([-dz, dz])	
+        self.n_a = n_a
         #self.net = mlp([obs_dim] + list(hidden_sizes), activation, activation)
-        self.net = base_actor()
-        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        self.log_std_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        self.act_limit = act_limit
-
-    # changes to support robot
-    # courtesy of Dian Wang
-    def decodeActions(self, *args):
-        unscaled_p = args[0]
-        unscaled_dx = args[1]
-        unscaled_dy = args[2]
-        unscaled_dz = args[3]
-
-        p = 0.5 * (unscaled_p + 1) * (self.p_range[1] - self.p_range[0]) + self.p_range[0]
-        dx = 0.5 * (unscaled_dx + 1) * (self.dx_range[1] - self.dx_range[0]) + self.dx_range[0]
-        dy = 0.5 * (unscaled_dy + 1) * (self.dy_range[1] - self.dy_range[0]) + self.dy_range[0]
-        dz = 0.5 * (unscaled_dz + 1) * (self.dz_range[1] - self.dz_range[0]) + self.dz_range[0]
-
-        if self.n_a == 5:
-            unscaled_dtheta = args[4]
-            dtheta = 0.5 * (unscaled_dtheta + 1) * (self.dtheta_range[1] - self.dtheta_range[0]) + self.dtheta_range[0]
-            actions = torch.stack([p, dx, dy, dz, dtheta], dim=1)
-            unscaled_actions = torch.stack([unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz, unscaled_dtheta], dim=1)
-        else:
-            actions = torch.stack([p, dx, dy, dz], dim=1)
-            unscaled_actions = torch.stack([unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz], dim=1)
-        return unscaled_actions, actions
-
-	# scaled actions
-    def getActionFromPlan(self, plan):
-        def getUnscaledAction(action, action_range):
-            unscaled_action = 2 * (action - action_range[0]) / (action_range[1] - action_range[0]) - 1
-            return unscaled_action
-        dx = plan[:, 1].clamp(*self.dx_range)
-        p = plan[:, 0].clamp(*self.p_range)
-        dy = plan[:, 2].clamp(*self.dy_range)
-        dz = plan[:, 3].clamp(*self.dz_range)
-        unscaled_p = getUnscaledAction(p, self.p_range)
-        unscaled_dx = getUnscaledAction(dx, self.dx_range)
-        unscaled_dy = getUnscaledAction(dy, self.dy_range)
-        unscaled_dz = getUnscaledAction(dz, self.dz_range)
-        if self.n_a == 5:
-            dtheta = plan[:, 4].clamp(*self.dtheta_range)
-            unscaled_dtheta = getUnscaledAction(dtheta, self.dtheta_range)
-            return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz, unscaled_dtheta)
-        else:
-            return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
         
+        #
+        self.net = base_encoder(out_dim=128)
 
-    def forward(self, state, obs, deterministic=False, with_logprob=True):
-        state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
-        cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-        net_out = self.net(cat_obs)
+        # hidden_sizes
+        self.mu_layer = nn.Linear(128, 5)
+        self.log_std_layer = nn.Linear(128, 5)
+        #self.act_limit = act_limit
+
+
+
+    def forward(self, obs, deterministic=False, with_logprob=True):
+        net_out = self.net(obs)
+
         mu = self.mu_layer(net_out)
         log_std = self.log_std_layer(net_out)
         log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -99,6 +84,7 @@ class SquashedGaussianMLPActor(nn.Module):
             # Only used for evaluating policy at test time.
             pi_action = mu
         else:
+
             pi_action = pi_distribution.rsample()
 
         if with_logprob:
@@ -113,43 +99,63 @@ class SquashedGaussianMLPActor(nn.Module):
             logp_pi = None
 
         pi_action = torch.tanh(pi_action)
-        pi_action = self.act_limit * pi_action
+        #pi_action = self.act_limit * pi_action
 
         return pi_action, logp_pi
 
-
-# is this the critic
-# this is a value function
 class MLPQFunction(nn.Module):
-
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
-        
-    # so the q function is processing the action, observation, and state
+
+    # how does this q function actually work?
     def forward(self, obs, act):
         q = self.q(torch.cat([obs, act], dim=-1))
         return torch.squeeze(q, -1) # Critical to ensure q has right shape.
 
 
-# we need to add support for our CNNs
-class MLPActorCritic(nn.Module):
+class SACCritic(nn.Module):
+    def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
+        super().__init__()
+        self.state_conv_1 = base_encoder(obs_shape=(2, 128, 128), out_dim=128)
+        self.critic_fc_1 = torch.nn.Sequential(
+            torch.nn.Linear(128 + action_dim, 128),
+            nn.ReLU(inplace=True),
+            torch.nn.Linear(128, 1)
+        )
+        self.apply(weights_init)
 
-    def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU):
+    def forward(self, obs, act):
+        conv_out = self.state_conv_1(obs)
+        out_1 = self.critic_fc_1(torch.cat((conv_out, act), dim=1))
+        return out_1 
+class MLPActorCritic(nn.Module):
+    def __init__(self, n_a=5, hidden_sizes=(1024,1024), activation=nn.ReLU):
         super().__init__()
 
-        obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
-        act_limit = action_space.high[0]
-
         # build policy and value functions
-        self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)
-        self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
-        self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+        #self.pi = SquashedGaussianMLPActor(hidden_sizes, activation)
+        self.pi = EquivariantActor(N=8)
+        self.critic = EquivariantSACCritic(N=8)
+        #self.q2 = EquivariantSACCritic()
+    
+    def sample(self, x):
+        mean, log_std = self.pi.forward(x)
+        std = log_std.exp()
+        normal = Normal(mean, std)
+        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+        return action, log_prob, mean
 
-    # add the observation in here
-    def act(self, obs, deterministic=False):
+    def act(self, state, obs, deterministic=False):
         with torch.no_grad():
-            a, _ = self.pi(obs, deterministic, False)
-            return a.numpy()
+            state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
+            cat_obs = torch.cat([obs, state_tile], dim=1)
+            a, log_prob, mean = self.sample(cat_obs)
+            return a.cpu()

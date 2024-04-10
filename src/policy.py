@@ -18,47 +18,16 @@ from torch.distributions import Normal, Categorical
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-class torch_buffer():
-	def __init__(self, observation_shape, action_shape, num_steps, num_envs):
-		self.observation_shape = observation_shape
-		self.action_shape = action_shape
-		self.states = torch.zeros((num_steps, num_envs) + observation_shape).to(device)
-		self.actions = torch.zeros((num_steps, num_envs) + action_shape).to(device)
-		self.log_probs = torch.zeros((num_steps, num_envs)).to(device)
-		self.rewards = torch.zeros((num_steps, num_envs)).to(device)
-		self.terminals = torch.zeros((num_steps, num_envs)).to(device)
-		self.values = torch.zeros((num_steps, num_envs)).to(device)
-
-	# flatten the buffer values for evaluation
-	def flatten(self, returns, advantages):
-		b_obs = self.states.reshape((-1,) + self.observation_shape)
-		b_logprobs = self.log_probs.reshape(-1)
-		b_actions = self.actions.reshape((-1,) + self.action_shape)
-		b_advantages = advantages.reshape(-1)
-		b_returns = returns.reshape(-1)
-		b_values = self.values.reshape(-1)
-		return b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values
-
-
+# Abstract class for a policy
 class policy(ABC):
-	# add the metrics
 	def __init__(self, params):
-		# accessing through the dictionary is slower
 		self.params_dict = params
-
 		self.all_steps = None
 		self.minibatch_size = None
-		# Define a list of attributes to exclude from direct assignment
 		exclude_list = ['batch_size', 'minibatch_size']
-		# Iterate through the keys in params
 		for key, value in params.items():
-			# Check if the key is not in the exclude list
 			if key not in exclude_list:
-				# Dynamically set the attribute based on the key-value pair
 				setattr(self, key, value)
-
-		# Tht total steps x the number of envs represents how many total
-		# steps in the said environment will be taken by the training loop		
 		self.all_steps = self.num_steps * self.num_envs
 		self.batch_size = int(self.num_envs * self.num_steps)
 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
@@ -77,7 +46,6 @@ class policy(ABC):
 		self.policy = actor_critic(self.state_dim[0], 
 			self.action_dim, self.hidden_dim, self.num_layers, self.dropout, self.continuous).to(device)
 
-		self.buffer = torch_buffer(self.state_dim, self.envs.single_action_space.shape, self.num_steps, self.num_envs)
 		self.optimizer =  torch.optim.Adam(self.policy.parameters(), lr=self.learning_rate, eps=1e-5)
 		self.total_returns = []
 		self.total_episode_lengths = []
