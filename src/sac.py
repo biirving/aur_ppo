@@ -19,10 +19,10 @@ import copy
 
 import torch.nn.functional as F
 
-#sys.path.append('/home/benjamin/Desktop/ml/BulletArm/bulletarm_baselines')
-#from bulletarm_baselines.equi_rl.agents.sac import SAC
-#from bulletarm_baselines.equi_rl.networks.sac_net import SACCritic, SACGaussianPolicy
-#from bulletarm_baselines.equi_rl.networks.equivariant_sac_net import EquivariantSACActor, EquivariantSACCritic, EquivariantSACActorDihedral, EquivariantSACCriticDihedral
+sys.path.append('/home/benjamin/Desktop/ml/BulletArm/bulletarm_baselines')
+from bulletarm_baselines.equi_rl.agents.sac import SAC
+from bulletarm_baselines.equi_rl.networks.sac_net import SACCritic, SACGaussianPolicy
+from bulletarm_baselines.equi_rl.networks.equivariant_sac_net import EquivariantSACActor, EquivariantSACCritic, EquivariantSACActorDihedral, EquivariantSACCriticDihedral
 
 ExpertTransition = collections.namedtuple('ExpertTransition', 'state obs action reward next_state next_obs done step_left expert')
 from scipy.ndimage import affine_transform
@@ -164,7 +164,7 @@ def sac(render, ac_kwargs=dict(), seed=0,
         num_processes=1, steps_per_epoch=1000, epochs=4, replay_size=int(1e5), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=10000, 
         update_after=1000, update_every=50, pretrain_episodes=20, num_test_episodes=10, 
-        max_ep_len=100,track=False, save_freq=1, gym_id=None, device=torch.device('cpu')):
+        max_ep_len=100,track=False, save_freq=1, gym_id=None, device=torch.device('cuda')):
 
     simulator='pybullet'
     gamma = 0.99
@@ -177,7 +177,7 @@ def sac(render, ac_kwargs=dict(), seed=0,
     workspace = np.asarray([[0.45-workspace_size/2, 0.45+workspace_size/2],
                         [0-workspace_size/2, 0+workspace_size/2],
                         [0.01, 0.25]])
-    env_config={'workspace': workspace, 'max_steps': 100, 
+    env_config={'workspace': workspace, 'max_steps': 50, 
             'obs_size': 128, 
             'fast_mode': True, 
             'action_sequence': 'pxyzr', 
@@ -213,7 +213,11 @@ def sac(render, ac_kwargs=dict(), seed=0,
     initialize=True
 
 
-    agent = core.MLPActorCritic()
+    #agent = core.MLPActorCritic()
+    agent = SAC((lr, lr), gamma, device, dpos, dpos, dpos, drot, action_sequence, 0.001, automatic_entropy_tuning=True)
+    actor = EquivariantSACActor().to(device)
+    critic = EquivariantSACCritic().to(device)
+    agent.initNetwork(actor, critic)
 
     if track:
         import wandb
@@ -300,7 +304,8 @@ def sac(render, ac_kwargs=dict(), seed=0,
     replay_len=0
     for t in tqdm(range(total_steps)):
         
-        u_a, a = get_action(s, o)
+        #u_a, a = get_action(s, o)
+        u_a, a = agent.getEGreedyActions(s, o, 0.0)
 
         envs.stepAsync(a, auto_reset=False)
 
@@ -364,4 +369,4 @@ if __name__ == '__main__':
     print('training')
     sac(args.render, ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
         gamma=args.gamma, seed=args.seed, num_processes=args.num_envs, epochs=args.epochs,
-        track=args.track, gym_id=args.gym_id, pretrain_episodes=100, device=device)
+        track=args.track, gym_id=args.gym_id, pretrain_episodes=20, device=device)
