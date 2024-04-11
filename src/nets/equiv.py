@@ -1,5 +1,6 @@
 from e2cnn import nn, gspaces
 import torch
+from torch.distributions import Normal
 
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
@@ -85,8 +86,55 @@ class EquivariantActor(torch.nn.Module):
         log_std = conv_out[:, self.action_dim:]
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
+class SACGaussianPolicyBase(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
 
+    def sample(self, x):
+        mean, log_std = self.forward(x)
+        std = log_std.exp()
+        normal = Normal(mean, std)
+        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+        return action, log_prob, mean
+class EquivariantSACActor(SACGaussianPolicyBase):
+    """
+    Equivariant SAC's equivariant actor
+    """
+    def __init__(self, obs_shape=(2, 128, 128), action_dim=5, n_hidden=128, initialize=True, N=4, enc_id=1):
+        super().__init__()
+        assert obs_shape[1] in [128, 64]
+        self.obs_channel = obs_shape[0]
+        self.action_dim = action_dim
+        self.c4_act = gspaces.Rot2dOnR2(N)
+        enc = getEnc(obs_shape[1], enc_id)
+        self.n_rho1 = 2 if N==2 else 1
+        self.conv = torch.nn.Sequential(
+            enc(self.obs_channel, n_hidden, initialize, N),
+            nn.R2Conv(nn.FieldType(self.c4_act, n_hidden * [self.c4_act.regular_repr]),
+                      # mixed representation including action_dim trivial representations (for the std of all actions),
+                      # (action_dim-2) trivial representations (for the mu of invariant actions),
+                      # and 1 standard representation (for the mu of equivariant actions)
+                      nn.FieldType(self.c4_act, self.n_rho1 * [self.c4_act.irrep(1)] + (action_dim*2-2) * [self.c4_act.trivial_repr]),
+                      kernel_size=1, padding=0, initialize=initialize)
+        )
 
+    def forward(self, obs):
+        batch_size = obs.shape[0]
+        obs_geo = nn.GeometricTensor(obs, nn.FieldType(self.c4_act, self.obs_channel*[self.c4_act.trivial_repr]))
+        conv_out = self.conv(obs_geo).tensor.reshape(batch_size, -1)
+        dxy = conv_out[:, 0:2]
+        inv_act = conv_out[:, 2:self.action_dim]
+        mean = torch.cat((inv_act[:, 0:1], dxy, inv_act[:, 1:]), dim=1)
+        log_std = conv_out[:, self.action_dim:]
+        log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
+        return mean, log_std
 class EquivariantCritic(torch.nn.Module):
     def __init__(self, obs_shape=(2, 128, 128), n_hidden=128, initialize=True, N=4):
         super().__init__()

@@ -17,10 +17,6 @@ import collections
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-
-
-# so why doesn't this work at all?
-
 class torch_buffer():
 	def __init__(self, state_shape, observation_shape, action_shape, num_steps, num_envs):
 		self.state_shape = state_shape
@@ -188,7 +184,7 @@ class robot_ppo():
 		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		for i, d in enumerate(done):
 			if d:
-				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
+				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(d)
 				#print('Episode length', episode_length)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
