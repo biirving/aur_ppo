@@ -1,0 +1,29 @@
+Tested in:
+Ubuntu 22.04.3 LTS in WSL 2
+
+Create Conda Env:
+conda create -n aur_ppo python=3.9.13
+conda activate aur_ppo
+
+BulletArm:
+git clone https://github.com/ColinKohler/BulletArm.git
+cd BulletArm
+pip install -r requirements.txt
+pip install .
+
+Clone aur_ppo:
+cd ..
+git clone https://github.com/biirving/aur_ppo.git
+
+Install packages:
+# Modify torch install as needed for your machine.
+# Windows, Cuda 12.x
+pip install torch==2.0.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Linux, Cuda 12.x
+pip install torch==2.0.0 torchvision torchaudio
+# Other packages
+pip install e2cnn==0.2.3 numpy==1.24.3 tensorboard cython matplotlib tqdm scipy gym
+
+URDFs:
+Might need to add urdf files under:
+home\user\miniconda3\envs\aur_ppo\lib\python3.9\site-packages\bulletarm\pybullet\urdf
