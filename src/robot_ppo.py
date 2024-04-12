@@ -98,6 +98,7 @@ class robot_ppo():
 
 		# Tht total steps x the number of envs represents how many total
 		# steps in the said environment will be taken by the training loop		
+		print(f'num_steps: {self.num_steps}')
 		self.all_steps = self.num_steps * self.num_envs 
 		self.batch_size = int(self.num_envs * self.num_steps)
 		self.minibatch_size = int(self.all_steps // self.num_minibatches)
@@ -172,11 +173,12 @@ class robot_ppo():
 			true_action, scaled = self.policy.getActionFromPlan(true_action)
 			#_, true_action, _, _, _ = self.policy.evaluate(next_state.to(device), next_obs.to(device))
 		self.buffer.true_actions[step] = true_action 
-		next_states, next_obs, reward, done, dist = self.envs.step(actions)
-		print('distance', dist)
+		next_states, next_obs, reward, done = self.envs.step(actions)
+		# next_states, next_obs, reward, done, dist = self.envs.step(actions)
+		# print('distance', dist)
 		# more negative rewards for greater distances
 		# the normalized tensor?
-		reward =- torch.tensor(dist)
+		# reward =- torch.tensor(dist)
     	#return np.linalg.norm(np.array(gripper_pos) - np.array(obj_pos)) < 0.03
 		for i, rew in enumerate(reward):
 			self.episodic_returns.add_value(i, rew)
@@ -184,7 +186,9 @@ class robot_ppo():
 		next_states, next_obs, next_done = next_states.to(device), next_obs.to(device), done.to(device)
 		for i, d in enumerate(done):
 			if d:
-				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(d)
+				discounted_return, episode_length = self.episodic_returns.calc_discounted_return(i)
+				# Probably a bug?
+				# discounted_return, episode_length = self.episodic_returns.calc_discounted_return(d)
 				#print('Episode length', episode_length)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
@@ -209,10 +213,12 @@ class robot_ppo():
 
 		self.pretrain_buffer.true_actions[step] = unscaled 
 		self.pretrain_buffer.log_probs[step] = logprob
-		next_states, next_obs, reward, done, dist = self.envs.step(scaled, auto_reset=True)
+		next_states, next_obs, reward, done = self.envs.step(scaled, auto_reset=True)
+		# next_states, next_obs, reward, done, dist = self.envs.step(scaled, auto_reset=True)
 		self.pretrain_buffer.rewards[step] = reward.view(-1)
 		next_states, next_obs, next_done = next_states, next_obs, done
-		return next_states, next_obs, next_done, dist
+		return next_states, next_obs, next_done
+		# return next_states, next_obs, next_done, dist
 
 	def run_gae(self, next_value, next_done, buffer, num_steps):
 		advantages = torch.zeros_like(buffer.rewards)
@@ -267,20 +273,23 @@ class robot_ppo():
 		"""
 		state, obs = self.envs.reset()
 		done = torch.zeros(self.num_envs).to(device)
-		dists = []
+		# dists = []
 		for step in tqdm(range(0, self.pretrain_steps)):
 			self.pretrain_buffer.states[step] = state
 			self.pretrain_buffer.observations[step] = obs
 			self.pretrain_buffer.terminals[step] = done 
-			state, obs, done, dist = self.expert_rollout(step, state, obs)
-			dists.append(dist)
-		return state.to(device), obs.to(device), done.to(device), dists
+			state, obs, done = self.expert_rollout(step, state, obs)
+			# state, obs, done, dist = self.expert_rollout(step, state, obs)
+			# dists.append(dist)
+		return state.to(device), obs.to(device), done.to(device)
+		# return state.to(device), obs.to(device), done.to(device), dists
 
-	def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size, dists):
+	def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size):
+	# def pretrain_update(self, buffer, update_epochs, batch_size, minibatch_size, dists):
 		b_inds = np.arange(batch_size)
 		(b_states, b_obs, b_logprobs, b_actions, 
 			b_advantages, b_returns, b_values, b_true_actions) = buffer 
-		print(len(dists))
+		# print(len(dists))
 		for ep in range(update_epochs):
 			np.random.shuffle(b_inds)
 			for index in range(0, batch_size, minibatch_size):
@@ -302,7 +311,8 @@ class robot_ppo():
 				# do we have auto_reset = true?
 				#u_a, a = self.expert.test_action(state.to(device), obs.to(device))
 				scaled_agent, unscaled_agent, logprob, _, value = self.policy.evaluate(state.to(device), obs.to(device))
-				state, obs, reward, done, dist = self.envs.step(scaled_agent, auto_reset=True)
+				state, obs, reward, done = self.envs.step(scaled_agent, auto_reset=True)
+				# state, obs, reward, done, dist = self.envs.step(scaled_agent, auto_reset=True)
 				for i, rew in enumerate(reward):
 					test_returns.add_value(i, rew)
 				for i, d in enumerate(done):
@@ -413,13 +423,15 @@ class robot_ppo():
 			print('Pretraining...')
 			self.policy.train()
 			# Populate the pretrain buffer
-			next_state, next_obs, next_done, distances = self.pretrain()
+			next_state, next_obs, next_done = self.pretrain()
+			# next_state, next_obs, next_done, distances = self.pretrain()
 			self.pretrain_buffer.load_to_device()
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.pretrain_buffer, self.pretrain_steps)
 			returns = returns.to(device)
 			advantages = advantages.to(device)
 			flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
-			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, distances)
+			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size)
+			# self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, distances)
 			self.pretrain_buffer.load_to_cpu()
 			self.test_env(writer)
 			print('Pretraining complete')
