@@ -315,4 +315,4 @@ class ppo():
 		plt.xlabel('Timestep')
 		plt.ylabel('Return')
 		plt.legend()
-		plt.savefig('/home/benjamin/Desktop/ml/aur_ppo/plots/' + title + '_num_layers_' + str(self.num_layers) + '_dropout_' + str(self.dropout) + '_num_envs_' + str(self.num_envs) + '_num_mb_' + str(self.num_minibatches) + '.png')
+		plt.savefig('../plots/' + title + '_num_layers_' + str(self.num_layers) + '_dropout_' + str(self.dropout) + '_num_envs_' + str(self.num_envs) + '_num_mb_' + str(self.num_minibatches) + '.png')
