@@ -19,49 +19,21 @@ class bulletArmPolicy(policy):
         self.obs_type = obs_type
 
     def _loadBatchToDevice(self, batch, device='cuda'):
-        """
-        Load batch into pytorch tensor. The structure for this loading method is specific to the bulletArm 
-        environment, where the state represents the gripper arpeture (open being 0 or closed being 1)
-        and the observation representing our top-down 2 dimensional image.
 
-        :param batch: list of transitions
-        :return: states_tensor, obs_tensor, action_tensor, rewards_tensor, next_states_tensor, next_obs_tensor,
-                 non_final_masks, step_lefts_tensor, is_experts_tensor
-        
-        """
-        states = []
-        images = []
-        xys = []
-        rewards = []
-        next_states = []
-        next_obs = []
-        dones = []
-        step_lefts = []
-        is_experts = []
-        for d in batch:
-            states.append(d.state)
-            images.append(d.obs)
-            xys.append(d.action)
-            rewards.append(d.reward.squeeze())
-            next_states.append(d.next_state)
-            next_obs.append(d.next_obs)
-            dones.append(d.done)
-            step_lefts.append(d.step_left)
-            is_experts.append(d.expert)
-        states_tensor = torch.tensor(np.stack(states)).long().to(device)
-        obs_tensor = torch.tensor(np.stack(images)).to(device)
+        states_tensor = torch.tensor(np.stack([d.state for d in batch])).long().to(device)
+        obs_tensor = torch.tensor(np.stack([d.obs for d in batch])).to(device)
         if len(obs_tensor.shape) == 3:
             obs_tensor = obs_tensor.unsqueeze(1)
-        action_tensor = torch.tensor(np.stack(xys)).to(device)
-        rewards_tensor = torch.tensor(np.stack(rewards)).to(device)
-        next_states_tensor = torch.tensor(np.stack(next_states)).long().to(device)
-        next_obs_tensor = torch.tensor(np.stack(next_obs)).to(device)
+        action_tensor = torch.tensor(np.stack([d.action for d in batch])).to(device)
+        rewards_tensor = torch.tensor(np.stack([d.reward.squeeze() for d in batch])).to(device)
+        next_states_tensor = torch.tensor(np.stack([d.next_state for d in batch])).long().to(device)
+        next_obs_tensor = torch.tensor(np.stack([d.next_obs for d in batch])).to(device)
         if len(next_obs_tensor.shape) == 3:
             next_obs_tensor = next_obs_tensor.unsqueeze(1)
-        dones_tensor = torch.tensor(np.stack(dones)).int()
+        dones_tensor = torch.tensor(np.stack([d.done for d in btach])).int()
         non_final_masks = (dones_tensor ^ 1).float().to(device)
-        step_lefts_tensor = torch.tensor(np.stack(step_lefts)).to(device)
-        is_experts_tensor = torch.tensor(np.stack(is_experts)).bool().to(device)
+        step_lefts_tensor = torch.tensor(np.stack([d.step_left for d in batch])).to(device)
+        is_experts_tensor = torch.tensor(np.stack([d.expert for d in batch])).bool().to(device)
 
         # scale observation from int to float
         obs_tensor = obs_tensor/255*0.4

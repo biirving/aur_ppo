@@ -46,8 +46,8 @@ class sacBullet(bulletArmPolicy):
         q1, q2 = self.critic(o, a)
         q1 = q1.reshape(batch_size)
         q2 = q2.reshape(batch_size)
-        loss_q1 = F.mse_loss(q1, backup)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-        loss_q2 = F.mse_loss(q2, backup)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
+        loss_q1 = F.mse_loss(q1, backup)  
+        loss_q2 = F.mse_loss(q2, backup)  
         return loss_q1, loss_q2
     
     def compute_loss_pi(self):

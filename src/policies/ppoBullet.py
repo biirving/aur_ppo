@@ -2,21 +2,27 @@ from src.bulletArmPolicy import bulletArmPolicy
 
 class ppoBullet(bulletArmPolicy):
     def __init__(self, alpha=1e-2, actor_lr=1e-3, critic_lr=1e-3, alpha_lr=1e-3, 
-    gamma=0.99, gae=True, target_update_frequency=1, num_processes=5, 
-    total_steps=10000, update_epochs=10, num_minibatches=50):
+    gamma=0.99, gae=True, target_update_frequency=1, num_processes=5, total_steps=10000, 
+    update_epochs=10, clip_coeff=0.2, max_grad_norm=0.5, value_coeff=0.5, clip_vloss=False, num_minibatches=50):
         super().__init__()
         self.alpha = alpha
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
         self.alpha_lr = alpha_lr
-        self.gamma = gamma
         self.target_update_frequency = target_update_frequency
         self.tau = 1e-2
 
         # TODO: Add these to abstract PPO class
         self.gae = gae
+        self.gamma = gamma
         self.minibatch_size = int(num_processes * total_steps) // num_minibatches
         self.num_update_epochs = update_epochs
+        self.clip_coeff = clip_coeff
+        self.max_grad_norm = max_grad_norm
+        self.value_coeff = value_coeff
+        self.clip_vloss = clip_vloss
+        self.flattened_buffer={}
+        self.transition_dict={}
 
     def initNet(self, actor, critic):
         self.pi=actor
@@ -28,48 +34,18 @@ class ppoBullet(bulletArmPolicy):
         self.pi_target = deepcopy(self.pi)
 
     def _loadBatchToDevice(self, batch, device='cuda'):
-        """
-        Load batch into pytorch tensor. The functionality of this method varies for on-policy and off policy
-        methods.
-
-        :param batch: list of transitions
-        :return: states_tensor, obs_tensor, action_tensor, rewards_tensor, next_states_tensor, next_obs_tensor,
-                 non_final_masks, step_lefts_tensor, is_experts_tensor
-        
-        """
-        states = []
-        images = []
-        xys = []
-        rewards = []
-        dones = []
-        step_lefts = []
-        values = []
-        expert_actions = []
-        log_probs = []
-
-        for d in batch:
-            states.append(d.state)
-            images.append(d.obs)
-            xys.append(d.action)
-            rewards.append(d.reward.squeeze())
-            dones.append(d.done)
-            step_lefts.append(d.step_left)
-            values.append(d.value)
-            expert_actions.append(d.expert_action)
-            log_probs.append(d.log_prob)
-
-        states_tensor = torch.tensor(np.stack(states)).long().to(device)
-        obs_tensor = torch.tensor(np.stack(images)).to(device)
+        states_tensor = torch.tensor(np.stack([d.state for d in batch] states)).long().to(device)
+        obs_tensor = torch.tensor(np.stack([d.obs for d in batch])).to(device)
         if len(obs_tensor.shape) == 3:
             obs_tensor = obs_tensor.unsqueeze(1)
-        action_tensor = torch.tensor(np.stack(xys)).to(device)
-        rewards_tensor = torch.tensor(np.stack(rewards)).to(device)
-        dones_tensor = torch.tensor(np.stack(dones)).int()
+        action_tensor = torch.tensor(np.stack([d.action for d in batch])).to(device)
+        rewards_tensor = torch.tensor(np.stack([d.reward.squeeze() for d in batch])).to(device)
+        dones_tensor = torch.tensor(np.stack([d.dones for d in batch])).int()
         non_final_masks = (dones_tensor ^ 1).float().to(device)
-        step_lefts_tensor = torch.tensor(np.stack(step_lefts)).to(device)
-        values_tensor = torch.tensor(np.stack(values)).to(device)
-        expert_actions_tensor = torch.tensor(np.stack(true_actions)).to(device)
-        log_probs_tensor = torch.tensor(np.stack(log_probs)).to(device)
+        step_lefts_tensor = torch.tensor(np.stack([d.step_left for d in batch])).to(device)
+        values_tensor = torch.tensor(np.stack([d.value for d in batch])).to(device)
+        expert_actions_tensor = torch.tensor(np.stack([d.expert_action for d in batch])).to(device)
+        log_probs_tensor = torch.tensor(np.stack([d.log_prob for d in batch])).to(device)
 
         # scale observation from int to float
         obs_tensor = obs_tensor/255*0.4
@@ -87,6 +63,7 @@ class ppoBullet(bulletArmPolicy):
         
         return states_tensor, obs_tensor, action_tensor, rewards_tensor, \
                 non_final_masks, step_lefts_tensor, values_tensor, expert_actions_tensor, log_probs_tensor
+
     def load_info(self):
         batch_size = self.loss_calc_dict['batch_size']
         states = self.loss_calc_dict['states']
@@ -112,6 +89,26 @@ class ppoBullet(bulletArmPolicy):
             obs = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
         return batch_size, states, obs, action_idx, rewards, non_final_masks, step_lefts, values, expert_actions, log_probs
 
+    def fill_flattened_buffer(self):
+        batch_size, states, obs, actions, rewards, dones, steps_left, values, expert, log_probs = self._loadLossCalcDict()
+        self.flattened_buffer['states'] = states.view(states.shape[0] * states.shape[1])
+		self.flattened_buffer['obs'] = obs.view(observations.shape[0] * observations.shape[1], 
+								 observations.shape[2], observations.shape[3], observations.shape[4])
+		self.flattened_buffer['log_probs'] = log_probs.reshape(-1)
+		self.flattened_buffer['actions'] = actions.view(actions.shape[0] * actions.shape[1], actions.shape[2])
+		self.flattened_buffer['expert'] = expert.view(expert.shape[0] * expert.shape[1], expert.shape[2])
+		self.flattened_buffer['values'] = values.reshape(-1)
+    
+    def get_flattened_buffer_values(self, inds, device='cuda'):
+        states = self.flattened_buffer['states'][inds].to(device)
+        obs = self.flattened_buffer['obs'][inds].to(device)
+        old_log_probs = self.flattened_buffer['log_probs'][inds].to(device)
+        actions = self.flattened_buffer['actions'][inds].to(device)
+        expert = self.flattened_buffer['expert'][inds].to(device)
+        advantages = self.flattened_buffer['advantages'][inds].to(device)
+        returns = self.flattened_buffer['returns'][inds].to(device)
+        values = self.flattened_buffer['values'][inds].to(device)
+        return states, obs, old_log_probs, actions, expert, advantages, returns, values
 
     def run_gae(self, next_value, next_done):
 		advantages = torch.zeros_like(self.loss_calc_dict['rewards'])
@@ -159,39 +156,70 @@ class ppoBullet(bulletArmPolicy):
 				returns, advantages = self.normal_advantage(next_value, next_done)
 		return returns, advantages
     
-    def compute_loss_q(self):
-        pass
-    
-    def compute_loss_pi(self):
-        pass
+    def compute_loss_pi(self, mb_inds):
 
-    def update(self, data, next_obs, next_value, next_done):
+        states = self.flattened_buffer['states'][mb_inds]
+        obs = self.flattened_buffer['obs'][mb_inds]
+        actions = self.flattened_buffer['actions'][mb_inds]
+        old_log_probs = self.flattened_buffer['log_probs'][mb_inds]
+
+        _, _, newlogprob, entropy, newvalue = self.policy.evaluate(states, obs, actions) 
+        log_ratio = newlogprob - old_log_probs
+        ratio = log_ratio.exp()
+        mb_advantages = b_advantages[mb_inds]
+        # 1e-8 avoids division by 0
+        if self.norm_adv:
+            mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
+        loss_one = -mb_advantages * ratio
+        loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
+        policy_loss = torch.max(loss_one, loss_two).mean()
+        policy_losses.append(policy_loss.item())
+        expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
+        loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss + self.expert_weight * expert_loss
+        return loss
+    
+    def compute_loss_v(self, mb_inds):
+        if self.clip_vloss:
+            v_loss_unclipped = (newvalue - returns) ** 2
+            v_clipped = values + torch.clamp(
+                newvalue - values,
+                -self.clip_coeff,
+                self.clip_coeff,
+            )
+            v_loss_clipped = (v_clipped - returns) ** 2
+            v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+            value_loss = 0.5 * v_loss_max.mean()
+        else:
+            value_loss = 0.5 * ((newvalue - values) ** 2).mean()
+        value_loss *= self.value_coeff
+        return value_loss
+
+    def update(self, data):
+        # what should I pass here
         self._loadBatchToDevice(data)
+        # need these transition values which were not appended to the buffer
+        next_obs = self.transition_dict['next_obs']
+        next_value = self.transition_dict['next_value']
+        next_done = self.transition_dict['next_done']
         batch_size = self.loss_calc_dict['batch_size']
+
+        # fill out the flattened buffer with the returns and advantages
 		returns, advantages = self.advantages(next_obs, next_value, next_done)
-        # then assuming we have some reshaping in here
+        self.flattened_buffer['returns'] = returns
+        self.flattened_buffer['advantages'] = advantages
+        # fill the buffer
+        self.fill_flattened_buffer() 
+
         for uep in self.num_update_epochs:
             b_inds = np.arange(batch_size)
             for index in range(0, batch_size, self.minibatch_size):
 				mb_inds = b_inds[index:index+self.minibatch_size]
-				_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
-				old_log_probs = b_logprobs[mb_inds]
-				log_ratio = newlogprob.to(device) - old_log_probs.to(device)
-				ratio = log_ratio.exp()
-				with torch.no_grad():	
-					old_approx_kl = (-log_ratio).mean()
-					approx_kl = ((ratio - 1) - log_ratio).mean()
-					clip_fracs += [((ratio - 1.0).abs() > self.clip_coeff).float().mean().item()]
-				mb_advantages = b_advantages[mb_inds]
-				# 1e-8 avoids division by 0
-				if self.norm_adv:
-					mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
-				loss_one = -mb_advantages * ratio
-				loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
-				policy_loss = torch.max(loss_one, loss_two).mean()
-				policy_losses.append(policy_loss.item())
 
-				# value clipping
+                states, obs, old_log_probs, actions, expert, advantages, 
+                        returns, values = self.get_flattened_buffer_values(mb_inds)
+
+				_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
+
 				if(self.equivariant):
 					newvalue = newvalue.tensor.view(-1)
 				else:
@@ -215,10 +243,10 @@ class ppoBullet(bulletArmPolicy):
 				expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
 				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss + self.expert_weight * expert_loss
 
+				self.optimizer.zero_grad()
 				loss.backward()
 				nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.max_grad_norm)
 				self.optimizer.step()
-				self.optimizer.zero_grad()
 
         qf1_loss, qf2_loss  = self.compute_loss_q()
         qf_loss = qf1_loss + qf2_loss

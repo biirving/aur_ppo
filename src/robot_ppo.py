@@ -463,9 +463,9 @@ class robot_ppo():
 				self.buffer.terminals[step] = next_done
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
 
+
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.buffer, self.num_steps)
 			buffer = self.buffer.flatten(returns, advantages)
-
 			(policy_loss, 
 			value_loss, 
 			entropy_loss, 

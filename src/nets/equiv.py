@@ -103,6 +103,7 @@ class SACGaussianPolicyBase(torch.nn.Module):
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean)
         return action, log_prob, mean
+
 class EquivariantSACActor(SACGaussianPolicyBase):
     """
     Equivariant SAC's equivariant actor
@@ -135,6 +136,7 @@ class EquivariantSACActor(SACGaussianPolicyBase):
         log_std = conv_out[:, self.action_dim:]
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
+
 class EquivariantCritic(torch.nn.Module):
     def __init__(self, obs_shape=(2, 128, 128), n_hidden=128, initialize=True, N=4):
         super().__init__()
