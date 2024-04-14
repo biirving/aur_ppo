@@ -167,7 +167,7 @@ class ppoBullet(bulletArmPolicy):
 
     def update(self, data, next_obs, next_value, next_done):
         self._loadBatchToDevice(data)
-
+        batch_size = self.loss_calc_dict['batch_size']
 		returns, advantages = self.advantages(next_obs, next_value, next_done)
         # then assuming we have some reshaping in here
         for uep in self.num_update_epochs:

@@ -11,7 +11,9 @@ import sys, os, time
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import random
-from env_wrapper import EnvWrapper
+
+sys.path.append('../')
+from src.utils.env_wrapper import EnvWrapper
 from torch.distributions import Normal, Categorical
 import collections
 

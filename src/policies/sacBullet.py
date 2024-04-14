@@ -14,7 +14,7 @@ class sacBullet(bulletArmPolicy):
         self.gamma = gamma
         self.target_update_frequency = target_update_frequency
         self.tau = 1e-2
-        self.actor = None
+        self.pi = None
         self.critic = None
         self.target_entropy = -self.n_a
         self.num_update = 0
