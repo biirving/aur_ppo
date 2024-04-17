@@ -30,7 +30,7 @@ class bulletArmPolicy(policy):
         next_obs_tensor = torch.tensor(np.stack([d.next_obs for d in batch])).to(device)
         if len(next_obs_tensor.shape) == 3:
             next_obs_tensor = next_obs_tensor.unsqueeze(1)
-        dones_tensor = torch.tensor(np.stack([d.done for d in btach])).int()
+        dones_tensor = torch.tensor(np.stack([d.done for d in batch])).int()
         non_final_masks = (dones_tensor ^ 1).float().to(device)
         step_lefts_tensor = torch.tensor(np.stack([d.step_left for d in batch])).to(device)
         is_experts_tensor = torch.tensor(np.stack([d.expert for d in batch])).bool().to(device)
