@@ -58,7 +58,6 @@ class ppoBulletTrainer(bulletTrainer):
             if rew != 0:
                 print('reward', rew)
             self.returns.add_value(i, rew)
-
         done_idxes = torch.nonzero(d).squeeze(1)
         if done_idxes.shape[0] != 0:
             reset_states_, reset_obs_ = self.envs.reset_envs(done_idxes)

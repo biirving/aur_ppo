@@ -44,3 +44,10 @@ class policy(ABC):
         Act! Act!
         """
         pass
+
+    @abstractmethod
+    def save_agent(self):
+        """
+        Save our agent
+        """
+        pass

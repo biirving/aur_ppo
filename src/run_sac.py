@@ -13,6 +13,7 @@ from src.utils.str2bool import str2bool
 from src.utils.buffers import QLearningBuffer, QLearningBufferAug
 from src.utils.misc import ExpertTransition, normalizeTransition, store_returns
 from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
+from src.nets.base_cnns import PPOGaussianPolicy, PPOCritic, vitActor, vitCritic, SACGaussianPolicy, SACCritic
 from src.utils.env_wrapper import EnvWrapper
 
 from torch.utils.tensorboard import SummaryWriter

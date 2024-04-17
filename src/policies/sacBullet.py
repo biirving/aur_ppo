@@ -112,3 +112,7 @@ class sacBullet(bulletArmPolicy):
             raise ValueError('Agent not yet initialized.') 
         self.pi.train()
         self.critic.train()
+
+    def save(self, path=None):
+        torch.save(self.pi.state_dict(), path)
+        torch.save(self.critic.state_dict(), path)

@@ -5,6 +5,11 @@ from torch.distributions import Categorical, Normal, MultivariateNormal
 import torch.nn.functional as F
 import numpy as np
 
+
+LOG_SIG_MAX = 2
+LOG_SIG_MIN = -20
+epsilon = 1e-6
+
 # orthogonal initialization
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
@@ -47,7 +52,6 @@ class critic(nn.Module):
     def forward(self, input:tensor) -> tensor:
         return self.net(input)
 
-
 class cnn(nn.Module):
     def __init__(self, dim:int, input_dim:int, num_layers:int, dropout:float, action_std=1.0) -> None:
         super().__init__()
@@ -59,3 +63,41 @@ class cnn(nn.Module):
         self.net = nn.Sequential(*layers)
     def forward(self, input:tensor) -> tensor:
         return self.net(input)
+
+class SACGaussianPolicyBase(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def sample(self, x):
+        mean, log_std = self.forward(x)
+        std = log_std.exp()
+        normal = Normal(mean, std)
+        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+        return action, log_prob, mean
+
+
+class PPOGaussianPolicyBase(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def sample(self, x, action=None):
+        mean, log_std = self.forward(x)
+        action_std = log_std.exp()
+        dist = Normal(mean, action_std)
+        if action is None:
+            action = dist.rsample()
+        action = torch.tanh(action)
+        log_prob = dist.log_prob(action)
+        # clipping the log probability
+        log_prob -= torch.log((1 - action.pow(2)) + epsilon)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+        entropy = dist.entropy()		
+        return action, log_prob, mean, entropy 

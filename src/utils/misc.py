@@ -3,20 +3,28 @@ import collections
 
 # TODO: Should be defined base on learning algorithm
 ExpertTransition = collections.namedtuple('ExpertTransition', 'state obs action reward next_state next_obs done step_left expert')
+ExpertTransitionPPO = collections.namedtuple('ExpertTransitionPPO', 'state obs action reward done step_left expert_action log_probs value')
 
-def normalizeTransition(d: ExpertTransition):
-    obs = np.clip(d.obs, 0, 0.32)
-    obs = obs/0.4*255
-    obs = obs.astype(np.uint8)
+def normalize_observation(obs):
+    """Normalize observation data."""
+    obs = np.clip(obs, 0, 0.32)
+    obs = obs / 0.4 * 255
+    return obs.astype(np.uint8)
 
-    next_obs = np.clip(d.next_obs, 0, 0.32)
-    next_obs = next_obs/0.4*255
-    next_obs = next_obs.astype(np.uint8)
+def normalizeTransition(d):
+    """General function to normalize transitions that works with different types of ExpertTransition."""
+    new_obs = normalize_observation(d.obs)
 
-    return ExpertTransition(d.state, obs, d.action, d.reward, d.next_state, next_obs, d.done, d.step_left, d.expert)
+    if hasattr(d, 'next_obs'):
+        # Normalizing next_obs only if it exists
+        new_next_obs = normalize_observation(d.next_obs)
+        return ExpertTransition(d.state, new_obs, d.action, d.reward, d.next_state, new_next_obs, d.done, d.step_left, d.expert)
+    else:
+        # For ExpertTransitionPPO which does not have next_obs
+        return ExpertTransitionPPO(d.state, new_obs, d.action, d.reward, d.done, d.step_left, d.expert_action, d.log_probs, d.value)
 
 class store_returns():
-    def __init__(self, num_envs, gamma):
+    def __init__(self, num_envs, gamma=0.99):
         self.gamma = gamma
         self.env_returns = [[] for _ in range(num_envs)]
 
@@ -30,3 +38,6 @@ class store_returns():
             R = r + self.gamma * R
             self.env_returns[i] = []
         return R, len_episode
+
+    def reset(self):
+        self.env_returns = [[] for _ in range(num_envs)]
