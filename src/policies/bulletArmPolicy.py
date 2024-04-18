@@ -77,7 +77,7 @@ class bulletArmPolicy(policy):
         """
         batch_size, states, obs, action_idx, rewards, next_states, next_obs, non_final_masks, step_lefts, is_experts = self.load_info() 
 
-        if self.obs_type is 'pixel':
+        if self.obs_type == 'pixel':
             # stack state as the second channel of the obs
             obs = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
             next_obs = torch.cat([next_obs, next_states.reshape(next_states.size(0), 1, 1, 1).repeat(1, 1, next_obs.shape[2], next_obs.shape[3])], dim=1)

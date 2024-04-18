@@ -99,6 +99,10 @@ class QLearningBuffer:
         self._storage = save_state['storage']
         self._max_size = save_state['max_size']
         self._next_idx = save_state['next_idx']
+    
+    def reset(self):
+        self._storage=[]
+        self._next_idx=0
 
 class QLearningBufferAug(QLearningBuffer):
     def __init__(self, size, aug_n=4):

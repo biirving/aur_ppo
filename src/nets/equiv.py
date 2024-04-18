@@ -173,6 +173,7 @@ def getEnc(obs_size, enc_id):
     assert obs_size in [128]
     assert enc_id in [1]
     return EquivariantEncoder128
+
 class EquivariantSACCritic(torch.nn.Module):
     """
     Equivariant SAC's invariant critic

@@ -142,7 +142,7 @@ class PPOGaussianPolicy(PPOGaussianPolicyBase):
         return mean, log_std
 
 class PPOCritic(nn.Module):
-    def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
+    def __init__(self, obs_shape=(2, 128, 128)):
         super().__init__()
         self.conv = base_encoder(obs_shape, 128)
         self.critic = torch.nn.Sequential(

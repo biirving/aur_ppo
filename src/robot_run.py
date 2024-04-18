@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import torch
 import sys
-sys.path.append('/work/nlp/b.irving/aur_ppo/src/')
-from robot_ppo import robot_ppo
+sys.path.append('../')
+from src.robot_ppo import robot_ppo
 #from robot_ppo_cython import robot_ppo
 import os, sys, argparse, time
 import matplotlib.pyplot as plt

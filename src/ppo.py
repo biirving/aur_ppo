@@ -205,6 +205,7 @@ class ppo():
 				next_obs, next_done = self.rewards_to_go(step, next_obs, global_step, writer)	
 								
 			returns, advantages = self.advantages(next_obs, next_done)
+			print(advantages.shape)
 
 			(b_obs, b_logprobs, b_actions, 
 				b_advantages, b_returns, b_values) = self.buffer.flatten(returns, advantages)
@@ -237,6 +238,8 @@ class ppo():
 					if self.norm_adv:
 						mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
 					# gradient descent, rather than ascent
+					print('ratio', ratio.shape)
+					print('advantages', mb_advantages.shape)
 					loss_one = -mb_advantages * ratio
 					loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
 					policy_loss = torch.max(loss_one, loss_two).mean()

@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import torch
-from ppo import ppo
+
 import os, sys, argparse, time
+sys.path.append('../')
+from src.ppo import ppo
 import matplotlib.pyplot as plt
 import numpy as np
 from distutils.util import strtobool

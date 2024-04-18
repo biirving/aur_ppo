@@ -11,8 +11,8 @@ from tqdm import tqdm
 device = torch.device('cuda')
 
 class ppoBulletTrainer(bulletTrainer):
-    def __init__(self, agent: ppoBullet, anneal_lr=False, anneal_exp=False,total_time_steps=10000, num_env_steps=128, num_processes=5, num_eval_episodes=100):
-        super().__init__(total_time_steps, num_env_steps, num_processes)
+    def __init__(self, agent: ppoBullet, anneal_lr=False, anneal_exp=False,total_time_steps=50000, num_env_steps=1024, num_processes=5, num_eval_episodes=100, track=False):
+        super().__init__(total_time_steps, num_env_steps, num_processes, track)
         self.agent = agent
         self.anneal_lr = anneal_lr  
         self.anneal_exp = anneal_exp
@@ -20,44 +20,55 @@ class ppoBulletTrainer(bulletTrainer):
         self.ppo_batch = self.num_processes * self.num_env_steps
         self.num_updates = self.total_time_steps // self.ppo_batch
         self.num_eval_episodes = num_eval_episodes
-		
+        self.track=track
 
     def pretrain(self):
         states, obs = self.envs.reset()
-        pretrain_episodes = 100
+        pretrain_episodes = 100 
         pretrain_batch_size = 16
         expert_actions = []
         agent_actions = []
         j = 0
+        update_epochs = 10 
+        planner_bar = tqdm(total=pretrain_episodes)
         while j < pretrain_episodes:
             with torch.no_grad():
                 true_action = self.envs.getNextAction()
                 unscaled, scaled = self.agent.getActionFromPlan(true_action)
                 expert_actions.append(unscaled.cpu().numpy())
-                (scaled_agent, unscaled_agent), logprob, _, value = self.agent.act(states.to(device), obs.to(device))
+                (scaled_agent, unscaled_agent), logprob, _, value = self.agent.act_pretrain(states.to(device), obs.to(device))
                 agent_actions.append(unscaled_agent.cpu().numpy())
             states, obs, reward, dones = self.envs.step(scaled, auto_reset=True)
             j += dones.sum().item()
+            planner_bar.update(dones.sum().item())
 
         expert_tensor = torch.tensor(np.stack([a for a in expert_actions])).squeeze(dim=0)
         agent_tensor = torch.tensor(np.stack([a for a in agent_actions])).squeeze(dim=0)
+        flattened_expert = expert_tensor.view(expert_tensor.shape[0] * expert_tensor.shape[1], expert_tensor.shape[2])
+        flattened_agent = agent_tensor.view(agent_tensor.shape[0] * agent_tensor.shape[1], agent_tensor.shape[2])
 
-        total_pretrain_steps = expert_tensor.shape[0]
-        b_inds = np.arange(total_pretrain_steps)
-
-        for index in tqdm(range(0, total_pretrain_steps, pretrain_batch_size)):
-            mb_inds = b_inds[index:index+pretrain_batch_size]
-            expert_loss = nn.functional.mse_loss(agent_tensor[mb_inds].cuda().requires_grad_(True), expert_tensor[mb_inds].cuda())
-            self.agent.pretrain_update(expert_loss)
-            print('expert loss', expert_loss)
+        total_pretrain_steps = flattened_expert.shape[0]
+        inds = np.arange(total_pretrain_steps)
+        for _ in range(update_epochs):
+            np.random.shuffle(inds)
+            for index in tqdm(range(0, total_pretrain_steps, pretrain_batch_size)):
+                mb_inds = inds[index:index+pretrain_batch_size]
+                expert_loss = nn.functional.mse_loss(flattened_agent[mb_inds].cuda().requires_grad_(True), flattened_expert[mb_inds].cuda())
+                self.agent.pretrain_update(expert_loss)
+                print('expert loss', expert_loss)
 
     def step_env(self, s, o, global_step):
         (u_a, a), lp, m, v = self.agent.act(s.cuda(), o.cuda())
+        # expert action
+        true_action = self.envs.getNextAction()
+        u_e, e = self.agent.getActionFromPlan(true_action)
         n_s, n_o, r, d = self.envs.step(a)
+
         for i, rew in enumerate(r):
             if rew != 0:
                 print('reward', rew)
             self.returns.add_value(i, rew)
+
         done_idxes = torch.nonzero(d).squeeze(1)
         if done_idxes.shape[0] != 0:
             reset_states_, reset_obs_ = self.envs.reset_envs(done_idxes)
@@ -67,7 +78,7 @@ class ppoBulletTrainer(bulletTrainer):
                 self.writer.add_scalar("charts/episodic_length", episode_length, global_step=global_step)
         
         for i in range(self.num_processes):
-            transition = ExpertTransitionPPO(s[i].numpy(), o[i].numpy(), u_a[i].numpy(), r[i].numpy(), d[i].numpy(), np.array(100), 0, lp[i].numpy(), v.numpy())
+            transition = ExpertTransitionPPO(s[i].numpy(), o[i].numpy(), u_a[i].numpy(), r[i].numpy(), d[i].numpy(), np.array(100), u_e[i].numpy(), lp[i].numpy(), v[i].numpy())
             self.replay_buffer.add(transition)
 
         return n_s, n_o, d
@@ -106,17 +117,17 @@ class ppoBulletTrainer(bulletTrainer):
         self.agent.initNet(actor, critic)
         if self.track:
             import wandb
-            wandb.init(project='ppo', entity='Aurelian', sync_tensorboard=True, config=None, name=gym_id + '_' + str(self.learning_rate) + '_' + 
-                       str(self.value_coeff) + '_' + str(self.entropy_coeff) + '_' + str(self.clip_coeff) + '_' + str(self.num_minibatches))
+            wandb.init(project='sac', entity='Aurelian', sync_tensorboard=True, config=None, name='ppo_' + gym_id)
         self.writer = SummaryWriter(f"runs/{gym_id}")
         self.set_threads_and_seeds(1)
 
         if self.do_pretraining:
+            print('Pretraining...')
             self.pretrain()
 
         start_time = time.time()
         self.global_step = 0
-        next_state, next_obs = self.envs.reset()
+        n_s, n_o = self.envs.reset()
         next_done = torch.zeros(self.num_processes).to(device)
 
         for update in tqdm(range(1, self.num_updates + 1)):
@@ -132,15 +143,14 @@ class ppoBulletTrainer(bulletTrainer):
 
             for step in tqdm(range(0, self.num_env_steps)):
                 self.global_step += 1 * self.num_processes 
-                n_s, n_o, n_d = self.step_env(next_state, next_obs, self.global_step)    
-                batch = self.replay_buffer.sample(self.replay_buffer.__len__())
-                #with torch.no_grad():
-                n_s = n_s.reshape(n_s.size(0), 1, 1, 1).repeat(1, 1, n_o.shape[2], n_o.shape[3])
-                n_o  = torch.cat([n_o, n_s], dim=1)
-                self.agent.update(batch, n_o.cuda(), n_d.cuda())
-                self.replay_buffer.clear()
+                n_s, n_o, n_d = self.step_env(n_s, n_o, self.global_step)    
+                
+            batch = self.replay_buffer.sample(self.ppo_batch)
+            n_s_feed = n_s.reshape(n_s.size(0), 1, 1, 1).repeat(1, 1, n_o.shape[2], n_o.shape[3])
+            n_o_feed  = torch.cat([n_o, n_s_feed], dim=1)
+            self.agent.update(batch, n_o_feed.cuda(), n_d.cuda())
 
-                if self.global_step % 1000 == 0:
-                    self.evaluate(self.global_step)
+            self.replay_buffer.reset()
+            if self.global_step % 1000 == 0:
+                self.evaluate(self.global_step)
 
-                self.returns.reset()

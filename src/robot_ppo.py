@@ -1,6 +1,6 @@
 import torch
 from torch import nn, tensor
-from nets import discrete_net, continuous_net, critic
+from src.nets.nets import discrete_net, continuous_net, critic
 from torch.distributions import MultivariateNormal, Categorical
 import gym
 import time
@@ -12,7 +12,6 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import random
 
-sys.path.append('../')
 from src.utils.env_wrapper import EnvWrapper
 from torch.distributions import Normal, Categorical
 import collections
@@ -224,6 +223,8 @@ class robot_ppo():
 
 	def run_gae(self, next_value, next_done, buffer, num_steps):
 		advantages = torch.zeros_like(buffer.rewards)
+		print('advantages', advantages.shape)
+		print('values', buffer.values.shape)
 		lastgaelam = 0
 		for t in reversed(range(num_steps - 1)):
 			if t == self.num_steps - 1:
@@ -341,6 +342,10 @@ class robot_ppo():
 				_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
 
 				old_log_probs = b_logprobs[mb_inds]
+				print(old_log_probs.shape)
+				print(newlogprob.shape)
+        		#old_log_probs = old_log_probs.squeeze(dim=1)
+        		#newlogprob = newlogprob.squeeze(dim=1)
 				log_ratio = newlogprob.to(device) - old_log_probs.to(device)
 
 				ratio = log_ratio.exp()
@@ -381,7 +386,7 @@ class robot_ppo():
 					v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
 					value_loss = 0.5 * v_loss_max.mean()
 				else:
-					value_loss = 0.5 * ((newvalue - b_values[mb_inds]) ** 2).mean()
+					value_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 				# this should just be added above
 				value_loss *= self.value_coeff
 
@@ -464,6 +469,7 @@ class robot_ppo():
 				next_state, next_obs, next_done = self.rewards_to_go(step, next_state, next_obs, global_step, writer)	
 
 
+			# but we have to flatten the returns?
 			returns, advantages = self.advantages(next_state, next_obs, next_done, self.buffer, self.num_steps)
 			buffer = self.buffer.flatten(returns, advantages)
 			(policy_loss, 

@@ -25,6 +25,7 @@ if __name__=='__main__':
     parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_reaching')
     parser.add_argument('-render', '--render', type=str2bool, help='Whether or not to render the environment', default=False, nargs='?', const=False)
     parser.add_argument('-num_processes', '--num_processes', type=int, help='Number of processes', default=5)
+    parser.add_argument('-track', '--track', type=str2bool, help='Track the rewards', default=False, nargs='?', const=False)
     args = parser.parse_args()
 
     simulator='pybullet'
@@ -56,6 +57,6 @@ if __name__=='__main__':
             'transparent_bin': True}
     planner_config={'random_orientation': True, 'dpos': dpos, 'drot': drot}
 
-    agent = ppoBullet()
-    trainer = ppoBulletTrainer(agent)
+    agent = ppoBullet(num_processes=args.num_processes)
+    trainer = ppoBulletTrainer(agent, num_processes=args.num_processes, track=args.track)
     trainer.run(simulator, env_config, planner_config, args.gym_id, PPOGaussianPolicy().cuda(), PPOCritic().cuda())
