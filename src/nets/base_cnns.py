@@ -134,6 +134,8 @@ class PPOGaussianPolicy(PPOGaussianPolicyBase):
         self.mean_linear = nn.Linear(128, action_dim)
         self.log_std_linear = nn.Linear(128, action_dim)
 
+        self.apply(weights_init)
+
     def forward(self, x):
         x = self.conv(x)
         mean = self.mean_linear(x)
@@ -149,6 +151,8 @@ class PPOCritic(nn.Module):
 				torch.nn.Linear(128, 128),
 				nn.ReLU(inplace=True),
 				torch.nn.Linear(128, 1))
+        self.apply(weights_init)
+
     def forward(self, x):
         x = self.conv(x)
         return self.critic(x)

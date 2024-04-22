@@ -27,7 +27,7 @@ import numpy.random as npr
 
 
 
-def sac(render, ac_kwargs=dict(), seed=0, 
+def sac(render, save_path=None, ac_kwargs=dict(), seed=0, 
         num_processes=1, steps_per_epoch=1000, epochs=4, replay_size=int(1e5), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=10000, 
         update_after=1000, update_every=50, pretrain_episodes=20, num_test_episodes=10, 
@@ -208,6 +208,7 @@ def sac(render, ac_kwargs=dict(), seed=0,
         if (t+1) % steps_per_epoch == 0:
             epoch = (t+1) // steps_per_epoch
 
+    self.agent.save(gym_id, save_path)
     
     envs.close()
     writer.close()
@@ -226,11 +227,12 @@ if __name__ == '__main__':
     parser.add_argument('-tr', '--track', type=str2bool, help='Track the performance of the environment', nargs='?', const=False, default=False)
     parser.add_argument('-ne', '--num_envs', type=int, default=1)
     parser.add_argument('-re', '--render', type=str2bool, nargs='?', const=False, default=False)
+    parser.add_argument('-sp', '--save_path', type=str, default='/scratch/irving.b/rl')
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print('training')
-    sac(args.render, ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
+    sac(args.render, save_path=args.save_path, ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
         gamma=args.gamma, seed=args.seed, num_processes=args.num_envs, epochs=args.epochs,
         track=args.track, gym_id=args.gym_id, pretrain_episodes=20, device=device)

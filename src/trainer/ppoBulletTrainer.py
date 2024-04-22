@@ -24,10 +24,11 @@ class ppoBulletTrainer(bulletTrainer):
 
     def pretrain(self):
         states, obs = self.envs.reset()
-        pretrain_episodes = 100 
+        pretrain_episodes = 2000 
         pretrain_batch_size = 16
         expert_actions = []
         agent_actions = []
+        obs_list = []
         j = 0
         update_epochs = 10 
         planner_bar = tqdm(total=pretrain_episodes)
@@ -36,26 +37,23 @@ class ppoBulletTrainer(bulletTrainer):
                 true_action = self.envs.getNextAction()
                 unscaled, scaled = self.agent.getActionFromPlan(true_action)
                 expert_actions.append(unscaled.cpu().numpy())
-                (scaled_agent, unscaled_agent), logprob, _, value = self.agent.act_pretrain(states.to(device), obs.to(device))
-                agent_actions.append(unscaled_agent.cpu().numpy())
+                obs_to_add = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
+            obs_list.append(obs_to_add.cpu().numpy())
             states, obs, reward, dones = self.envs.step(scaled, auto_reset=True)
             j += dones.sum().item()
             planner_bar.update(dones.sum().item())
 
         expert_tensor = torch.tensor(np.stack([a for a in expert_actions])).squeeze(dim=0)
-        agent_tensor = torch.tensor(np.stack([a for a in agent_actions])).squeeze(dim=0)
+        obs = torch.tensor(np.stack([o for o in obs_list]))
         flattened_expert = expert_tensor.view(expert_tensor.shape[0] * expert_tensor.shape[1], expert_tensor.shape[2])
-        flattened_agent = agent_tensor.view(agent_tensor.shape[0] * agent_tensor.shape[1], agent_tensor.shape[2])
-
+        flattened_obs = obs.view(obs.shape[0] * obs.shape[1], obs.shape[2], obs.shape[3], obs.shape[4])
         total_pretrain_steps = flattened_expert.shape[0]
         inds = np.arange(total_pretrain_steps)
         for _ in range(update_epochs):
             np.random.shuffle(inds)
             for index in tqdm(range(0, total_pretrain_steps, pretrain_batch_size)):
                 mb_inds = inds[index:index+pretrain_batch_size]
-                expert_loss = nn.functional.mse_loss(flattened_agent[mb_inds].cuda().requires_grad_(True), flattened_expert[mb_inds].cuda())
-                self.agent.pretrain_update(expert_loss)
-                print('expert loss', expert_loss)
+                self.agent.pretrain_update(flattened_obs[mb_inds].cuda(), flattened_expert[mb_inds].cuda())
 
     def step_env(self, s, o, global_step):
         (u_a, a), lp, m, v = self.agent.act(s.cuda(), o.cuda())
@@ -88,6 +86,8 @@ class ppoBulletTrainer(bulletTrainer):
         s, o = self.eval_envs.reset()
         eval_ep = 0
         sum_r = 0
+
+        eval_bar = tqdm(total=self.num_eval_episodes)
         while eval_ep < self.num_eval_episodes:
             (u_a, a), _, _, _ = self.agent.act(s.cuda(), o.cuda(), deterministic=True)
             s, o, r, d = self.eval_envs.step(a, auto_reset=True)
@@ -97,6 +97,7 @@ class ppoBulletTrainer(bulletTrainer):
                     print('reward', rew)
                 self.eval_returns.add_value(i, rew)
             eval_ep += d.sum().item()
+            eval_bar.update(d.sum().item())
 
             done_idxes = torch.nonzero(d).squeeze(1)
             best_return = float('-inf')
@@ -124,6 +125,8 @@ class ppoBulletTrainer(bulletTrainer):
         if self.do_pretraining:
             print('Pretraining...')
             self.pretrain()
+
+        self.evaluate(0)
 
         start_time = time.time()
         self.global_step = 0

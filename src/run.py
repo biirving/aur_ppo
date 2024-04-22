@@ -22,7 +22,7 @@ def str2bool(v):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_reaching')
+    parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_in_bowl')
     parser.add_argument('-render', '--render', type=str2bool, help='Whether or not to render the environment', default=False, nargs='?', const=False)
     parser.add_argument('-num_processes', '--num_processes', type=int, help='Number of processes', default=5)
     parser.add_argument('-track', '--track', type=str2bool, help='Track the rewards', default=False, nargs='?', const=False)

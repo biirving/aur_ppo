@@ -42,11 +42,11 @@ class ppoBullet(bulletArmPolicy):
 
         # TODO: Investigate alternative optimization options (grid search?)
         self.pi_optimizer =  torch.optim.Adam([
-                        {'params': self.pi.parameters(), 'lr': self.actor_lr},
-                        {'params': self.critic.parameters(), 'lr': self.critic_lr}
+                        {'params': self.pi.parameters(), 'lr': self.actor_lr}
+                        #{'params': self.critic.parameters(), 'lr': self.critic_lr}
                     ])
         # should use two separate optimizers
-        #self.v_optimizer =  torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
+        self.v_optimizer =  torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
         #self.pi_target = deepcopy(self.pi)
 
     def _loadBatchToDevice(self, batch, device='cuda'):
@@ -176,9 +176,10 @@ class ppoBullet(bulletArmPolicy):
         return returns, advantages
     
     def compute_loss_pi(self, mb_inds):
-        # but these are supposed to be flattened
+
         states, obs, old_log_probs, actions, expert, advantages, returns, values = self.get_buffer_values(mb_inds)
-        _, newlogprob, mean, entropy = self.pi.sample(obs.cuda(), actions.cuda())
+        # we want our gradients collected directly
+        a, newlogprob, mean, entropy = self.pi.sample(obs.cuda())
         old_log_probs = old_log_probs.squeeze(dim=1)
         newlogprob = newlogprob.squeeze(dim=1)
         log_ratio = newlogprob - old_log_probs
@@ -191,7 +192,8 @@ class ppoBullet(bulletArmPolicy):
         loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
         policy_loss = torch.max(loss_one, loss_two).mean()
         # want to make sure that this expert loss is being computed correctly
-        expert_loss = nn.functional.mse_loss(actions, expert)
+        expert_loss = nn.functional.mse_loss(a, expert)
+        # adding the mse here
         loss = policy_loss + self.expert_weight * expert_loss
         with torch.no_grad():
             # calculate approx_kl http://joschu.net/blog/kl-approx.html
@@ -201,7 +203,9 @@ class ppoBullet(bulletArmPolicy):
 
     def compute_loss_v(self, mb_inds):
         states, obs, old_log_probs, actions, expert, advantages, returns, values = self.get_buffer_values(mb_inds)
-        _, newlogprob, mean, entropy = self.pi.sample(obs.cuda(), actions.cuda())
+        # the only difference between the buffer action and the non buffer action is that the buffer
+        # action has been passed through decode actions (which can affect the gradient?)
+        a, newlogprob, mean, entropy = self.pi.sample(obs.cuda())
         newvalue = self.critic(obs.cuda())
         if self.clip_vloss:
             v_loss_unclipped = (newvalue - returns) ** 2
@@ -219,12 +223,15 @@ class ppoBullet(bulletArmPolicy):
         return value_loss
 
     # TODO: Most of this method should be in policy runner
+    # Implement gradient accumulation
     def update(self, data, next_obs, next_done):
         self._loadBatchToDevice(data)
         batch_size, states, obs, actions, rewards, dones, steps_left, values, expert, log_probs = self._loadLossCalcDict()
+
+        # this calculation is computationally expensive
         next_value = self.critic(obs)
-        # why is this shit returning a length 5 vector
         returns, advantages = self.advantages(next_obs, next_value, next_done)
+
         self.loss_calc_dict['returns'] = returns
         self.loss_calc_dict['advantages'] = advantages
 
@@ -233,38 +240,38 @@ class ppoBullet(bulletArmPolicy):
             for index in range(0, batch_size, self.minibatch_size): 
                 mb_inds = b_inds[index:index+self.minibatch_size]
 
-                # modify to handle two different optimizers
-
-                v_loss = self.compute_loss_v(mb_inds)
                 loss, entropy, approx_kl = self.compute_loss_pi(mb_inds)
                 entropy_loss = entropy.mean()
-                pi_loss = loss - self.entropy_coeff * entropy_loss + v_loss
+                # how to track the gradients?
+                pi_loss = loss - self.entropy_coeff * entropy_loss 
                 self.pi_optimizer.zero_grad()
                 pi_loss.backward()
+                torch.nn.utils.clip_grad_value_(self.pi.parameters(), clip_value=1.0) 
                 self.pi_optimizer.step()
 
-                #self.v_optimizer.zero_grad()
-                #v_loss.backward()
-                #self.v_optimizer.step()
+                v_loss = self.compute_loss_v(mb_inds)
+                self.v_optimizer.zero_grad()
+                v_loss.backward()
+                torch.nn.utils.clip_grad_value_(self.critic.parameters(), clip_value=1.0) 
+                self.v_optimizer.step()
+
+                for name, param in self.pi.named_parameters():
+                    if torch.isnan(param.grad).any():
+                        print(f"{name} gradient: \n {param.grad}")
+                        print(f"Warning: NaN detected in the gradients of {name}")
+                        sys.exit()
+
+                for name, param in self.critic.named_parameters():
+                    if torch.isnan(param.grad).any():
+                        print(f"{name} gradient: \n {param.grad}")
+                        print(f"Warning: NaN detected in the gradients of {name}")
+                        sys.exit()
 
             if approx_kl > self.target_kl:
                 break
 
             #self.pi_target.load_state_dict(self.pi.state_dict())
         self.loss_calc_dict = {}    
-
-    def pretrain_update(self, loss):
-        """
-        parameters: loss 
-
-        We only update the policy during pretraining. 
-        """
-        self.pi_optimizer.zero_grad()
-        loss.backward()
-	    #nn.utils.clip_grad_norm_(self.agent.actor.parameters(), self.max_grad_norm)
-        self.pi_optimizer.step()
-        #self.pi_target.load_state_dict(self.pi.state_dict())
-
 
     def act_grad(self, state, obs):
         state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
@@ -285,21 +292,23 @@ class ppoBullet(bulletArmPolicy):
             else:
                 a, log_prob, mean, entropy = self.pi.sample(obs)
             a = a.to('cpu')
+            if mean is not None:
+                mean=mean.cpu()
             val = self.critic(obs)
-            return self.decodeActions(*[a[:, i] for i in range(self.n_a)]), log_prob.cpu(), mean.cpu(), val.cpu()
+            return self.decodeActions(*[a[:, i] for i in range(self.n_a)]), log_prob.cpu(), mean, val.cpu()
 
+    def pretrain_update(self, obs, expert):
+        """
+        parameters: loss 
 
-    def act_pretrain(self, states, obs, deterministic=False):
-        with torch.no_grad():
-            obs = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
-            mean=None
-            if deterministic:
-                _, log_prob, a, entropy = self.pi.sample(obs)
-            else:
-                a, log_prob, mean, entropy = self.pi.sample(obs)
-            a = a.to('cpu')
-            val = self.critic(obs)
-            return self.decodeActions(*[a[:, i] for i in range(self.n_a)]), log_prob.cpu(), mean.cpu(), val.cpu()
+        We only update the policy during pretraining. 
+        """
+        a, log_prob, mean, entropy = self.pi.sample(obs)
+        expert_loss = nn.functional.mse_loss(a, expert)
+        self.pi_optimizer.zero_grad()
+        expert_loss.backward()
+        nn.utils.clip_grad_norm_(self.pi.parameters(), self.max_grad_norm)
+        self.pi_optimizer.step()
 
     def save_agent(self, path=None):
         torch.save(self.pi.state_dict(), path)

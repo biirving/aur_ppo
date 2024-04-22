@@ -113,6 +113,6 @@ class sacBullet(bulletArmPolicy):
         self.pi.train()
         self.critic.train()
 
-    def save(self, path=None):
-        torch.save(self.pi.state_dict(), path)
-        torch.save(self.critic.state_dict(), path)
+    def save_agent(self, env=None,path=None):
+        torch.save(self.pi.state_dict(), path + '/' + env +  '_agent.pt')
+        torch.save(self.critic.state_dict(), path + '/' + env + '_critic.pt')
