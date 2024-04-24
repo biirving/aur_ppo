@@ -11,7 +11,8 @@ from tqdm import tqdm
 device = torch.device('cuda')
 
 class ppoBulletTrainer(bulletTrainer):
-    def __init__(self, agent: ppoBullet, anneal_lr=False, anneal_exp=False,total_time_steps=50000, num_env_steps=1024, num_processes=5, num_eval_episodes=100, track=False):
+    # need a large batch size to learn stably
+    def __init__(self, agent: ppoBullet, anneal_lr=False, anneal_exp=False,total_time_steps=50000, num_env_steps=2048, num_processes=5, num_eval_episodes=100, track=False):
         super().__init__(total_time_steps, num_env_steps, num_processes, track)
         self.agent = agent
         self.anneal_lr = anneal_lr  
@@ -24,8 +25,8 @@ class ppoBulletTrainer(bulletTrainer):
 
     def pretrain(self):
         states, obs = self.envs.reset()
-        pretrain_episodes = 2000 
-        pretrain_batch_size = 16
+        pretrain_episodes = 5000
+        pretrain_batch_size = 32 
         expert_actions = []
         agent_actions = []
         obs_list = []
@@ -39,7 +40,7 @@ class ppoBulletTrainer(bulletTrainer):
                 expert_actions.append(unscaled.cpu().numpy())
                 obs_to_add = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
             obs_list.append(obs_to_add.cpu().numpy())
-            states, obs, reward, dones = self.envs.step(scaled, auto_reset=True)
+            states, obs, reward, dones, dists = self.envs.step(scaled, auto_reset=True)
             j += dones.sum().item()
             planner_bar.update(dones.sum().item())
 
@@ -60,7 +61,7 @@ class ppoBulletTrainer(bulletTrainer):
         # expert action
         true_action = self.envs.getNextAction()
         u_e, e = self.agent.getActionFromPlan(true_action)
-        n_s, n_o, r, d = self.envs.step(a)
+        n_s, n_o, r, d, dist = self.envs.step(a)
 
         for i, rew in enumerate(r):
             if rew != 0:
@@ -79,7 +80,7 @@ class ppoBulletTrainer(bulletTrainer):
             transition = ExpertTransitionPPO(s[i].numpy(), o[i].numpy(), u_a[i].numpy(), r[i].numpy(), d[i].numpy(), np.array(100), u_e[i].numpy(), lp[i].numpy(), v[i].numpy())
             self.replay_buffer.add(transition)
 
-        return n_s, n_o, d
+        return n_s, n_o, d, dist
 
     def evaluate(self, global_step):
         eval_bar = tqdm(total=self.num_eval_episodes)
@@ -90,7 +91,7 @@ class ppoBulletTrainer(bulletTrainer):
         eval_bar = tqdm(total=self.num_eval_episodes)
         while eval_ep < self.num_eval_episodes:
             (u_a, a), _, _, _ = self.agent.act(s.cuda(), o.cuda(), deterministic=True)
-            s, o, r, d = self.eval_envs.step(a, auto_reset=True)
+            s, o, r, d, dist = self.eval_envs.step(a, auto_reset=True)
 
             for i, rew in enumerate(r):
                 if rew != 0:
@@ -134,6 +135,7 @@ class ppoBulletTrainer(bulletTrainer):
         next_done = torch.zeros(self.num_processes).to(device)
 
         for update in tqdm(range(1, self.num_updates + 1)):
+            dists = []
             t0 = time.time()
             if self.anneal_lr:
                 frac = 1.0 - (update - 1.0) / self.num_updates
@@ -146,12 +148,14 @@ class ppoBulletTrainer(bulletTrainer):
 
             for step in tqdm(range(0, self.num_env_steps)):
                 self.global_step += 1 * self.num_processes 
-                n_s, n_o, n_d = self.step_env(n_s, n_o, self.global_step)    
-                
+                n_s, n_o, n_d, dist = self.step_env(n_s, n_o, self.global_step)    
+                dists.append(np.array(dist))
+
+            dists = torch.tensor(np.stack([ds for ds in dists]))
             batch = self.replay_buffer.sample(self.ppo_batch)
             n_s_feed = n_s.reshape(n_s.size(0), 1, 1, 1).repeat(1, 1, n_o.shape[2], n_o.shape[3])
             n_o_feed  = torch.cat([n_o, n_s_feed], dim=1)
-            self.agent.update(batch, n_o_feed.cuda(), n_d.cuda())
+            self.agent.update(batch, n_o_feed.cuda(), n_d.cuda(), dists.cuda())
 
             self.replay_buffer.reset()
             if self.global_step % 1000 == 0:

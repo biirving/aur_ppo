@@ -225,4 +225,8 @@ class EquivariantSACCritic(torch.nn.Module):
         out2 = self.critic_2(cat_geo).tensor.reshape(batch_size, 1)
         return out1, out2
 
-    
+
+# a class for the equivariant vision transformer
+class equivariantVitActor(SACGaussianPolicyBase):
+    def __init__(self):
+        pass  

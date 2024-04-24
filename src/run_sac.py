@@ -14,7 +14,8 @@ from src.utils.buffers import QLearningBuffer, QLearningBufferAug
 from src.utils.misc import ExpertTransition, normalizeTransition, store_returns
 from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
 from src.nets.base_cnns import PPOGaussianPolicy, PPOCritic, vitActor, vitCritic, SACGaussianPolicy, SACCritic
-from src.utils.env_wrapper import EnvWrapper
+#from src.utils.env_wrapper import EnvWrapper
+from src.env_wrapper_2 import EnvWrapper
 
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -25,7 +26,39 @@ import copy
 import torch.nn.functional as F
 import numpy.random as npr
 
-
+def pretrain_mse(envs, agent):
+    states, obs = envs.reset()
+    pretrain_episodes = 500 
+    pretrain_batch_size = 16
+    expert_actions = []
+    agent_actions = []
+    obs_list = []
+    j = 0
+    update_epochs = 10 
+    planner_bar = tqdm(total=pretrain_episodes)
+    while j < pretrain_episodes:
+        with torch.no_grad():
+            true_action = envs.getNextAction()
+            unscaled, scaled = agent.getActionFromPlan(true_action)
+            expert_actions.append(unscaled.cpu().numpy())
+            obs_to_add = torch.cat([obs, states.reshape(states.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])], dim=1)
+        obs_list.append(obs_to_add.cpu().numpy())
+        states, obs, reward, dones = envs.step(scaled, auto_reset=True)
+        j += dones.sum().item()
+        planner_bar.update(dones.sum().item())
+    expert_tensor = torch.tensor(np.stack([a for a in expert_actions])).squeeze(dim=0)
+    obs = torch.tensor(np.stack([o for o in obs_list]))
+    flattened_expert = expert_tensor.view(expert_tensor.shape[0] * expert_tensor.shape[1], expert_tensor.shape[2])
+    flattened_obs = obs.view(obs.shape[0] * obs.shape[1], obs.shape[2], obs.shape[3], obs.shape[4])
+    total_pretrain_steps = flattened_expert.shape[0]
+    inds = np.arange(total_pretrain_steps)
+    for _ in range(update_epochs):
+        np.random.shuffle(inds)
+        for index in tqdm(range(0, total_pretrain_steps, pretrain_batch_size)):
+            mb_inds = inds[index:index+pretrain_batch_size]
+            # should update the agent directly
+            agent.pretrain_update(flattened_obs[mb_inds].cuda(), flattened_expert[mb_inds].cuda())
+    
 
 def sac(render, save_path=None, ac_kwargs=dict(), seed=0, 
         num_processes=1, steps_per_epoch=1000, epochs=4, replay_size=int(1e5), gamma=0.99, 
@@ -79,10 +112,12 @@ def sac(render, save_path=None, ac_kwargs=dict(), seed=0,
     n_hidden = 128 
     initialize=True
 
-    #agent = core.aur_sac()
     agent = sacBullet() 
     actor = EquivariantSACActor().cuda()
     critic = EquivariantSACCritic().cuda()
+    # try pretraining the vitActor
+    #actor = vitActor().cuda()
+    #critic = vitCritic().cuda()
     agent.initNet(actor, critic)
 
     if track:
@@ -117,6 +152,10 @@ def sac(render, save_path=None, ac_kwargs=dict(), seed=0,
     """
 
     agent.train()
+
+    # using behavioral cloning before SAC training loop
+    mse_envs = envs
+    pretrain_mse(mse_envs, agent)
 
     counter = 0
     update_counter = 0
@@ -208,7 +247,7 @@ def sac(render, save_path=None, ac_kwargs=dict(), seed=0,
         if (t+1) % steps_per_epoch == 0:
             epoch = (t+1) // steps_per_epoch
 
-    self.agent.save(gym_id, save_path)
+    agent.save(gym_id, save_path)
     
     envs.close()
     writer.close()

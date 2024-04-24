@@ -2,7 +2,7 @@ from src.trainer.policyTrainer import policyTrainer
 import numpy as np
 from src.utils.buffers import QLearningBuffer, QLearningBufferAug
 from src.utils.misc import ExpertTransitionPPO, normalizeTransition, store_returns
-from src.utils.env_wrapper import EnvWrapper
+from src.env_wrapper import EnvWrapper
 from tqdm import tqdm
 import copy
 

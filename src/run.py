@@ -3,7 +3,7 @@ sys.path.append('../')
 from src.trainer.ppoBulletTrainer import ppoBulletTrainer
 from src.policies.ppoBullet import ppoBullet
 from src.utils.env_wrapper import EnvWrapper
-from src.nets.base_cnns import vitActor, vitCritic, SACCritic, SACGaussianPolicy, PPOCritic, PPOGaussianPolicy
+from src.nets.base_cnns import vitActor, vitCritic, SACCritic, SACGaussianPolicy, PPOCritic, PPOGaussianPolicy, vitPPOActor
 from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
 import numpy as np
 import torch
@@ -59,4 +59,4 @@ if __name__=='__main__':
 
     agent = ppoBullet(num_processes=args.num_processes)
     trainer = ppoBulletTrainer(agent, num_processes=args.num_processes, track=args.track)
-    trainer.run(simulator, env_config, planner_config, args.gym_id, PPOGaussianPolicy().cuda(), PPOCritic().cuda())
+    trainer.run(simulator, env_config, planner_config, args.gym_id, vitPPOActor().cuda(), PPOCritic().cuda())

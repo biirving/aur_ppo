@@ -9,7 +9,7 @@ class EnvWrapper:
         self.envs = env_factory.createEnvs(num_processes, env, env_config, planner_config)
 
     def reset(self):
-        (states, in_hands, obs) = self.envs.reset()
+        states, in_hands, obs = self.envs.reset()
         states = torch.tensor(states).float()
         obs = torch.tensor(obs).float()
         return states, obs
@@ -19,21 +19,21 @@ class EnvWrapper:
 
     def step(self, actions, auto_reset=False):
         actions = actions.cpu().numpy()
-        (states_, in_hands_, obs_), rewards, dones = self.envs.step(actions, auto_reset)
-        # (states_, in_hands_, obs_), rewards, dones, dist = self.envs.step(actions, auto_reset)
+        #states_,  obs_, rewards, dones = self.envs.step(actions, auto_reset)
+        (states_, in_hands_, obs_), rewards, dones, dist = self.envs.step(actions, auto_reset)
         states_ = torch.tensor(states_).float()
         obs_ = torch.tensor(obs_).float()
         rewards = torch.tensor(rewards).float()
         dones = torch.tensor(dones).float()
-        return states_, obs_, rewards, dones
-        # return states_, obs_, rewards, dones, dist
+        #return states_, obs_, rewards, dones
+        return states_, obs_, rewards, dones, dist
 
     def stepAsync(self, actions, auto_reset=False):
         actions = actions.cpu().numpy()
         self.envs.stepAsync(actions, auto_reset)
 
     def stepWait(self):
-        (states_, in_hands_, obs_), rewards, dones = self.envs.stepWait()
+        states_, in_hands_, obs_, rewards, dones = self.envs.stepWait()
         states_ = torch.tensor(states_).float()
         obs_ = torch.tensor(obs_).float()
         rewards = torch.tensor(rewards).float()

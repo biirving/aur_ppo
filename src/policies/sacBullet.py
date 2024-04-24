@@ -1,8 +1,10 @@
 from src.policies.bulletArmPolicy import bulletArmPolicy
 import torch
+from torch import nn
 import torch.nn.functional as F
 from copy import deepcopy
 import numpy as np
+import sys
 
 class sacBullet(bulletArmPolicy):
     def __init__(self, alpha=1e-2, actor_lr=1e-3, critic_lr=1e-3, alpha_lr=1e-3, gamma=0.99, target_update_frequency=1):
@@ -116,3 +118,21 @@ class sacBullet(bulletArmPolicy):
     def save_agent(self, env=None,path=None):
         torch.save(self.pi.state_dict(), path + '/' + env +  '_agent.pt')
         torch.save(self.critic.state_dict(), path + '/' + env + '_critic.pt')
+
+    def pretrain_update(self, obs, expert):
+        """
+        parameters: loss 
+
+        We only update the policy during pretraining. 
+        """
+        a, log_prob, mean = self.pi.sample(obs)
+        expert_loss = nn.functional.mse_loss(a, expert)
+        self.pi_optimizer.zero_grad()
+        expert_loss.backward()
+        nn.utils.clip_grad_norm_(self.pi.parameters(), 1.0)
+        self.pi_optimizer.step()
+        for name, param in self.pi.named_parameters():
+            if torch.isnan(param.grad).any():
+                #print(f"{name} gradient: \n {param.grad}")
+                print(f"Warning: NaN detected in the gradients of {name}")
+                sys.exit()

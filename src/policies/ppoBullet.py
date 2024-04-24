@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import numpy as np
 from copy import deepcopy
+import sys
 
 class ppoBullet(bulletArmPolicy):
     def __init__(self, alpha=1e-2, actor_lr=1e-3, critic_lr=1e-3, alpha_lr=1e-3, 
@@ -175,7 +176,7 @@ class ppoBullet(bulletArmPolicy):
                 returns, advantages = self.normal_advantage(next_value, next_done)
         return returns, advantages
     
-    def compute_loss_pi(self, mb_inds):
+    def compute_loss_pi(self, mb_inds, dists):
 
         states, obs, old_log_probs, actions, expert, advantages, returns, values = self.get_buffer_values(mb_inds)
         # we want our gradients collected directly
@@ -183,18 +184,30 @@ class ppoBullet(bulletArmPolicy):
         old_log_probs = old_log_probs.squeeze(dim=1)
         newlogprob = newlogprob.squeeze(dim=1)
         log_ratio = newlogprob - old_log_probs
+        print('log ratio', log_ratio)
         ratio = log_ratio.exp()
         mb_advantages = advantages[mb_inds]
         # 1e-8 avoids division by 0
+        print('prenorm adv', mb_advantages)
+
         if self.norm_adv:
             mb_advantages = (mb_advantages - mb_advantages.mean())/(mb_advantages.std() + 1e-8)
+
+        print('post norm adv', mb_advantages)
         loss_one = -mb_advantages * ratio
+
+        print('ratio', ratio)
         loss_two = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coeff, 1 + self.clip_coeff)
         policy_loss = torch.max(loss_one, loss_two).mean()
+
+        print('policy loss', policy_loss)
         # want to make sure that this expert loss is being computed correctly
         expert_loss = nn.functional.mse_loss(a, expert)
         # adding the mse here
-        loss = policy_loss + self.expert_weight * expert_loss
+        dists = torch.max(dists, dim=1)
+        dists = dists.values.mean()
+        loss = policy_loss + self.expert_weight * expert_loss + dists
+
         with torch.no_grad():
             # calculate approx_kl http://joschu.net/blog/kl-approx.html
             old_approx_kl = (-log_ratio).mean()
@@ -224,7 +237,7 @@ class ppoBullet(bulletArmPolicy):
 
     # TODO: Most of this method should be in policy runner
     # Implement gradient accumulation
-    def update(self, data, next_obs, next_done):
+    def update(self, data, next_obs, next_done, dists):
         self._loadBatchToDevice(data)
         batch_size, states, obs, actions, rewards, dones, steps_left, values, expert, log_probs = self._loadLossCalcDict()
 
@@ -240,26 +253,29 @@ class ppoBullet(bulletArmPolicy):
             for index in range(0, batch_size, self.minibatch_size): 
                 mb_inds = b_inds[index:index+self.minibatch_size]
 
-                loss, entropy, approx_kl = self.compute_loss_pi(mb_inds)
+                loss, entropy, approx_kl = self.compute_loss_pi(mb_inds, dists[mb_inds])
                 entropy_loss = entropy.mean()
                 # how to track the gradients?
+                print(loss)
+                print(entropy_loss)
                 pi_loss = loss - self.entropy_coeff * entropy_loss 
+                print('pi loss', pi_loss)
                 self.pi_optimizer.zero_grad()
                 pi_loss.backward()
                 torch.nn.utils.clip_grad_value_(self.pi.parameters(), clip_value=1.0) 
                 self.pi_optimizer.step()
-
-                v_loss = self.compute_loss_v(mb_inds)
-                self.v_optimizer.zero_grad()
-                v_loss.backward()
-                torch.nn.utils.clip_grad_value_(self.critic.parameters(), clip_value=1.0) 
-                self.v_optimizer.step()
 
                 for name, param in self.pi.named_parameters():
                     if torch.isnan(param.grad).any():
                         print(f"{name} gradient: \n {param.grad}")
                         print(f"Warning: NaN detected in the gradients of {name}")
                         sys.exit()
+
+                v_loss = self.compute_loss_v(mb_inds)
+                self.v_optimizer.zero_grad()
+                v_loss.backward()
+                torch.nn.utils.clip_grad_value_(self.critic.parameters(), clip_value=1.0) 
+                self.v_optimizer.step()
 
                 for name, param in self.critic.named_parameters():
                     if torch.isnan(param.grad).any():
@@ -272,16 +288,6 @@ class ppoBullet(bulletArmPolicy):
 
             #self.pi_target.load_state_dict(self.pi.state_dict())
         self.loss_calc_dict = {}    
-
-    def act_grad(self, state, obs):
-        state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
-        obs = torch.cat([obs, state_tile], dim=1)
-        if deterministic:
-            _, log_prob, a, entropy = self.pi.sample(obs)
-        else:
-            a, log_prob, _, entropy = self.pi.sample(obs)
-        a = a.to('cpu')
-        return self.decodeActions(*[a[:, i] for i in range(self.n_a)]), log_prob, mean, self.critic(obs)
 
     def act(self, states, obs, deterministic=False):
         with torch.no_grad():
@@ -309,6 +315,13 @@ class ppoBullet(bulletArmPolicy):
         expert_loss.backward()
         nn.utils.clip_grad_norm_(self.pi.parameters(), self.max_grad_norm)
         self.pi_optimizer.step()
+        for name, param in self.pi.named_parameters():
+            # check if the gradient is not none
+            if param.grad is not None:
+                if torch.isnan(param.grad).any():
+                    #print(f"{name} gradient: \n {param.grad}")
+                    print(f"Warning: NaN detected in the gradients of {name}")
+                    sys.exit()
 
     def save_agent(self, path=None):
         torch.save(self.pi.state_dict(), path)

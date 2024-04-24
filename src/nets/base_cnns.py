@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.distributions import Normal
 from src.nets.nets import SACGaussianPolicyBase, PPOGaussianPolicyBase
 from transformers import AutoImageProcessor, ViTModel, ViTConfig
+import sys
 
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
@@ -200,6 +201,28 @@ class vitActor(SACGaussianPolicyBase):
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
 
+class vitPPOActor(PPOGaussianPolicyBase):
+    def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
+        super().__init__()
+        self.encoder = vitWrapper(obs_shape)
+        self.mean_linear = nn.Linear(768, action_dim)
+        self.log_std_linear = nn.Linear(768, action_dim)
+        self.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.normal_(m.weight, mean=0., std=0.1)
+            torch.nn.init.constant_(m.bias, 0.)
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        pooler_output = encoded.last_hidden_state.mean(dim=1)
+        mean = self.mean_linear(pooler_output)
+        log_std = self.log_std_linear(pooler_output)
+        log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
+        return mean, log_std
+
+
 # similar amount of parameters
 class vitCritic(nn.Module):
     def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
@@ -228,3 +251,9 @@ class vitCritic(nn.Module):
         out_1 = self.critic_fc_1(torch.cat((encoder_out, act), dim=1))
         out_2 = self.critic_fc_2(torch.cat((encoder_out, act), dim=1))
         return out_1, out_2
+
+
+#class timesformerActor(nn.Module):
+ #   def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
+
+
