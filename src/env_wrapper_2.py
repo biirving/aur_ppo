@@ -1,11 +1,7 @@
 import sys
-sys.path.append('..')
-sys.path.append('/home/benjamin/Desktop/ml/BulletArm/bulletarm')
 import torch
 from bulletarm import env_factory
 
-# a torchless env wrapper? For numpy sac buffer?
-# trying to match open ai implementation as closely as possible
 class EnvWrapper:
     def __init__(self, num_processes, simulator, env, env_config, planner_config):
         self.envs = env_factory.createEnvs(num_processes, env, env_config, planner_config)
@@ -19,14 +15,14 @@ class EnvWrapper:
     def getNextAction(self):
         return torch.tensor(self.envs.getNextAction()).float()
 
-    # what if we are already fed a numpy array
     def step(self, actions, auto_reset=False):
+        # TODO: Create dists flag
         (states_, in_hands_, obs_), rewards, dones, dist = self.envs.step(actions, auto_reset)
         states_ = torch.tensor(states_).float()
         obs_ = torch.tensor(obs_).float()
         rewards = torch.tensor(rewards).float()
         dones = torch.tensor(dones).float()
-        return states_, obs_, rewards, dones
+        return states_, obs_, rewards, dones, dist
 
     def stepAsync(self, actions, auto_reset=False):
         self.envs.stepAsync(actions, auto_reset)
@@ -37,11 +33,10 @@ class EnvWrapper:
         obs_ = torch.tensor(obs_).float()
         rewards = torch.tensor(rewards).float()
         dones = torch.tensor(dones).float()
-        return states_, obs_, rewards, dones
+        return states_, obs_, rewards, dones, dist
 
     def getStepLeft(self):
         #return self.envs.getStepsLeft().float()
-        
         return torch.tensor(self.envs.getStepsLeft()).float()
 
     def reset_envs(self, env_nums):

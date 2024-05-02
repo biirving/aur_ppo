@@ -180,7 +180,7 @@ class vitWrapper(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-class vitActor(SACGaussianPolicyBase):
+class vitSACActor(SACGaussianPolicyBase):
     def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
         super().__init__()
         self.encoder = vitWrapper(obs_shape)
@@ -195,7 +195,8 @@ class vitActor(SACGaussianPolicyBase):
 
     def forward(self, x):
         encoded = self.encoder(x)
-        pooler_output = encoded.pooler_output
+        # take the mean
+        pooler_output = encoded.last_hidden_state.mean(dim=1)
         mean = self.mean_linear(pooler_output)
         log_std = self.log_std_linear(pooler_output)
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
@@ -224,7 +225,7 @@ class vitPPOActor(PPOGaussianPolicyBase):
 
 
 # similar amount of parameters
-class vitCritic(nn.Module):
+class vitSACCritic(nn.Module):
     def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
         super().__init__()
         self.encoder=vitWrapper()

@@ -1,6 +1,6 @@
 import torch
 from torch import nn, tensor
-from nets import discrete_net, continuous_net, critic
+from src.nets.nets import discrete_net, continuous_net, critic
 from torch.distributions import Normal, Categorical
 import numpy as np
 import sys

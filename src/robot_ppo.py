@@ -225,6 +225,7 @@ class robot_ppo():
 		advantages = torch.zeros_like(buffer.rewards)
 		print('advantages', advantages.shape)
 		print('values', buffer.values.shape)
+
 		lastgaelam = 0
 		for t in reversed(range(num_steps - 1)):
 			if t == self.num_steps - 1:

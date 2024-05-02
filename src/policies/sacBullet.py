@@ -21,9 +21,10 @@ class sacBullet(bulletArmPolicy):
         self.target_entropy = -self.n_a
         self.num_update = 0
 
-    def initNet(self, actor, critic):
+    def initNet(self, actor, critic, encoder_type):
         self.pi=actor
         self.critic=critic
+        self.encoder_type=encoder_type
 
         # TODO: Investigate alternative optimization options (grid search?)
         self.pi_optimizer = torch.optim.Adam(self.pi.parameters(), lr=self.actor_lr)
@@ -115,9 +116,9 @@ class sacBullet(bulletArmPolicy):
         self.pi.train()
         self.critic.train()
 
-    def save_agent(self, env=None,path=None):
-        torch.save(self.pi.state_dict(), path + '/' + env +  '_agent.pt')
-        torch.save(self.critic.state_dict(), path + '/' + env + '_critic.pt')
+    def save_agent(self, env=None, path=None):
+        torch.save(self.pi.state_dict(), path + '/' + env + self.encoder_type +  '_agent.pt')
+        torch.save(self.critic.state_dict(), path + '/' + env + self.encoder_type + '_critic.pt')
 
     def pretrain_update(self, obs, expert):
         """
@@ -132,7 +133,8 @@ class sacBullet(bulletArmPolicy):
         nn.utils.clip_grad_norm_(self.pi.parameters(), 1.0)
         self.pi_optimizer.step()
         for name, param in self.pi.named_parameters():
-            if torch.isnan(param.grad).any():
-                #print(f"{name} gradient: \n {param.grad}")
-                print(f"Warning: NaN detected in the gradients of {name}")
-                sys.exit()
+            if param.grad is not None:
+                if torch.isnan(param.grad).any():
+                    #print(f"{name} gradient: \n {param.grad}")
+                    print(f"Warning: NaN detected in the gradients of {name}")
+                    sys.exit()

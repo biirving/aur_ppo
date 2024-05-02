@@ -3,6 +3,7 @@ import collections
 
 # TODO: Should be defined base on learning algorithm
 ExpertTransition = collections.namedtuple('ExpertTransition', 'state obs action reward next_state next_obs done step_left expert')
+ExpertTransitionOffline = collections.namedtuple('ExpertTransitionOffline', 'state obs action reward next_state next_obs done step_left expert expert_action')
 ExpertTransitionPPO = collections.namedtuple('ExpertTransitionPPO', 'state obs action reward done step_left expert_action log_probs value')
 
 def normalize_observation(obs):
@@ -22,6 +23,15 @@ def normalizeTransition(d):
     else:
         # For ExpertTransitionPPO which does not have next_obs
         return ExpertTransitionPPO(d.state, new_obs, d.action, d.reward, d.done, d.step_left, d.expert_action, d.log_probs, d.value)
+
+def normalizeTransitionOffline(d: ExpertTransitionOffline):
+    obs = np.clip(d.obs, 0, 0.32)
+    obs = obs/0.4*255
+    obs = obs.astype(np.uint8)
+    next_obs = np.clip(d.next_obs, 0, 0.32)
+    next_obs = next_obs/0.4*255
+    next_obs = next_obs.astype(np.uint8)
+    return ExpertTransitionOffline(d.state, obs, d.action, d.reward, d.next_state, next_obs, d.done, d.step_left, d.expert, d.expert_action)
 
 class store_returns():
     def __init__(self, num_envs, gamma=0.99):

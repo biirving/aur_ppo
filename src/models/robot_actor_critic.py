@@ -1,7 +1,7 @@
 import torch
 from torch import nn, tensor
-from nets.equiv import EquivariantActor, EquivariantCritic
-from nets.base_cnns import base_actor, base_critic, base_encoder
+from src.nets.equiv import EquivariantActor, EquivariantCritic
+from src.nets.base_cnns import base_actor, base_critic, base_encoder
 
 from torch.distributions import Normal, Categorical
 import numpy as np

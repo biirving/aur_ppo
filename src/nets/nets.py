@@ -93,11 +93,13 @@ class PPOGaussianPolicyBase(torch.nn.Module):
         dist = Normal(mean, action_std)
         if action is None:
             action = dist.rsample()
-        action = torch.tanh(action)
+        action_ret = torch.tanh(action)
+        action_final = action_ret
         log_prob = dist.log_prob(action)
         # clipping the log probability
-        log_prob -= torch.log((1 - action.pow(2)) + epsilon)
+        log_prob -= torch.log((1 - action_ret.pow(2)) + epsilon)
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean)
+
         entropy = dist.entropy()		
-        return action, log_prob, mean, entropy 
+        return action_final, log_prob, mean, entropy 

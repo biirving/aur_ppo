@@ -3,12 +3,13 @@ import torch
 import numpy as np
 
 class policyTrainer(ABC):
-    def __init__(self, track=False):
+    def __init__(self, track=False, run_id=0):
         '''
         Template for a general policy trainer.
         '''
         self.device = torch.device('cuda')
         self.track=track
+        self.run_id=run_id
 
     def set_threads_and_seeds(self, seed=0):
         # intra op parallelism on cpu

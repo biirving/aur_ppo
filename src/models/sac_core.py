@@ -9,8 +9,8 @@ import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
 
-from nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
-from nets.base_cnns import base_actor, base_critic, base_encoder
+from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
+from src.nets.base_cnns import base_actor, base_critic, base_encoder
 
 print(torch.__version__)
 
