@@ -105,7 +105,7 @@ class QLearningBuffer:
         self._storage=[]
         self._next_idx=0
 
-    def save_buffer(self, save_path, run_id=0):
+    def save_buffer(self, save_path, env, run_id=0):
         # create the numpy arrays from storage
         states = np.stack([d.state for d in self._storage])
         obs = np.stack([d.obs for d in self._storage])
@@ -115,12 +115,12 @@ class QLearningBuffer:
         rewards = np.stack([d.reward.squeeze() for d in self._storage])
         dones = np.stack([d.done for d in self._storage])
         steps_left = np.stack([d.step_left for d in self._storage])
-        np.save(save_path + '/' + str(run_id) + '_states.npy', states)
-        np.save(save_path + '/' + str(run_id) + '_obs.npy', obs)
-        np.save(save_path + '/' + str(run_id) + '_actions.npy', actions)
-        np.save(save_path + '/' + str(run_id) + '_rewards.npy', rewards)
-        np.save(save_path + '/' + str(run_id) + '_dones.npy', dones)
-        np.save(save_path + '/' + str(run_id) + '_steps_left.npy', steps_left)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_states.npy', states)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_obs.npy', obs)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_actions.npy', actions)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_rewards.npy', rewards)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_dones.npy', dones)
+        np.save(save_path + '/' + str(run_id) + '_' + env + '_steps_left.npy', steps_left)
         # transition type specific
         if self.transition_type == 'base':
             next_states = np.stack([d.next_state for d in self._storage])
@@ -128,41 +128,46 @@ class QLearningBuffer:
             if len(next_obs.shape) == 3:
                 next_obs = next_obs.unsqueeze(1)
             is_experts = np.stack([d.expert for d in self._storage])
-            np.save(save_path + '/' + str(run_id) + '_next_states.npy', next_states)
-            np.save(save_path + '/' + str(run_id) + '_next_obs.npy', next_obs)
-            np.save(save_path + '/' + str(run_id) + '_is_experts.npy', is_experts)
+            np.save(save_path + '/' + str(run_id) + '_' + env +'_next_states.npy', next_states)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_next_obs.npy', next_obs)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_is_experts.npy', is_experts)
         if self.transition_type == 'offline':
             next_states = np.stack([d.next_state for d in self._storage])
             next_obs = np.stack([d.next_obs for d in self._storage])
             is_experts = np.stack([d.expert for d in self._storage])
             expert_actions = np.stack([d.expert_action for d in self._storage])
-            np.save(save_path + '/' + str(run_id) + '_next_states.npy',next_states)
-            np.save(save_path + '/' + str(run_id) + '_next_obs.npy', next_obs)
-            np.save(save_path + '/' + str(run_id) + '_is_experts.npy', is_experts)
-            np.save(save_path + '/' + str(run_id) + '_expert_actions.npy', expert_actions)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_next_states.npy',next_states)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_next_obs.npy', next_obs)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_is_experts.npy', is_experts)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_expert_actions.npy', expert_actions)
         if self.transition_type == 'ppo':
             expert_actions = np.stack([d.expert_action for d in self._storage])
             log_probs = np.stack([d.log_probs for d in self._storage])
             values = np.stack([d.value for d in self._storage])
-            np.save(save_path + '/' + str(run_id) + '_expert_actions.npy', expert_actions)
-            np.save(save_path + '/' + str(run_id) + '_log_probs.npy', log_probs)
-            np.save(save_path + '/' + str(run_id) + '_values.npy', values)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_expert_actions.npy', expert_actions)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_log_probs.npy', log_probs)
+            np.save(save_path + '/' + str(run_id) + '_' + env + '_values.npy', values)
         
-    def load_buffer(self, load_path, run_id=0):
+    def load_buffer(self, load_path, env, run_id=0):
         """
         Loading offline transitions from memory, primarily for offline reinforcement learning
+
+        load_path 
+            The path of the buffer that we wish to load
+        run_id
+            The id of the buffer that we are loading
         """
-        states = np.load(load_path + '/' + str(run_id) + '_states.npy', states)
-        obs = np.load(load_path + '/' + str(run_id) + '_obs.npy', obs)
-        actions = np.load(load_path + '/' + str(run_id) + '_actions.npy', actions)
-        rewards = np.load(load_path + '/' + str(run_id) + '_rewards.npy', rewards)
-        dones = np.load(load_path + '/' + str(run_id) + '_dones.npy', dones)
-        steps_left = np.load(load_path + '/' + str(run_id) + '_steps_left.npy', steps_left)
+        states = np.load(load_path + '/' + str(run_id) + '_' + env + '_states.npy')
+        obs = np.load(load_path + '/' + str(run_id) + '_' + env + '_obs.npy')
+        actions = np.load(load_path + '/' + str(run_id) + '_' + env + '_actions.npy')
+        rewards = np.load(load_path + '/' + str(run_id) + '_' + env + '_rewards.npy')
+        dones = np.load(load_path + '/' + str(run_id) + '_' + env + '_dones.npy')
+        steps_left = np.load(load_path + '/' + str(run_id) + '_' + env + '_steps_left.npy')
         # transition type specific
         if self.transition_type == 'base':
-            states_ = np.load(load_path + '/' + str(run_id) + '_next_states.npy', next_states)
-            obs_ = np.load(load_path + '/' + str(run_id) + '_next_obs.npy', next_obs)
-            is_experts = np.load(load_path + '/' + str(run_id) + '_is_experts.npy', is_experts)
+            states_ = np.load(load_path + '/' + str(run_id) + '_' + env +  '_next_states.npy')
+            obs_ = np.load(load_path + '/' + str(run_id) + '_' + env +  '_next_obs.npy')
+            is_experts = np.load(load_path + '/' + str(run_id) + '_' + env + '_is_experts.npy')
             # fill our storage buffer
             for i in range(states_.shape[0]):
                 transition = ExpertTransition(states[i], obs[i], actions[i],
@@ -170,19 +175,19 @@ class QLearningBuffer:
                                               dones[i], steps_left[i], is_experts[i])
                 self.add(transition)
         if self.transition_type == 'offline':
-            next_states = np.load(load_path + '/' + str(run_id) + '_next_states.npy', next_states)
-            next_obs = np.load(load_path + '/' + str(run_id) + '_next_obs.npy', next_obs)
-            is_experts = np.load(load_path + '/' + str(run_id) + '_is_experts.npy', is_experts)
-            expert_actions = np.load(load_path + '/' + str(run_id) + '_expert_actions.npy', expert_actions)
+            next_states = np.load(load_path + '/' + str(run_id) + '_' + env + '_next_states.npy')
+            next_obs = np.load(load_path + '/' + str(run_id) + '_' + env + '_next_obs.npy')
+            is_experts = np.load(load_path + '/' + str(run_id) + '_' + env + '_is_experts.npy')
+            expert_actions = np.load(load_path + '/' + str(run_id) + '_' + env + '_expert_actions.npy')
             for i in range(states_.shape[0]):
                 transition = ExpertTransitionOffline(states[i], obs[i], actions[i],
                                               rewards[i], states_[i], obs_[i], 
                                               dones[i], steps_left[i], is_experts[i], expert_actions[i])
                 self.add(transition)
         if self.transition_type == 'ppo':
-            expert_actions = np.load(load_path + '/' + str(run_id) + '_expert_actions.npy', expert_actions)
-            log_probs = np.load(load_path + '/' + str(run_id) + '_log_probs.npy', log_probs)
-            values = np.load(load_path + '/' + str(run_id) + '_values.npy', values)
+            expert_actions = np.load(load_path + '/' + str(run_id) + '_' + env + '_expert_actions.npy')
+            log_probs = np.load(load_path + '/' + str(run_id) + '_' + env + '_log_probs.npy')
+            values = np.load(load_path + '/' + str(run_id) + '_' + env + '_values.npy')
             for i in range(states.shape[0]):
                 transition = ExpertTransitionPPO(states[i], obs[i], actions[i], rewards[i],
                                               dones[i], steps_left[i], expert_actions[i], log_probs[i], values[i])

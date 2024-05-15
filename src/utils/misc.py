@@ -6,6 +6,8 @@ ExpertTransition = collections.namedtuple('ExpertTransition', 'state obs action 
 ExpertTransitionOffline = collections.namedtuple('ExpertTransitionOffline', 'state obs action reward next_state next_obs done step_left expert expert_action')
 ExpertTransitionPPO = collections.namedtuple('ExpertTransitionPPO', 'state obs action reward done step_left expert_action log_probs value')
 
+ExpertTransitionGym = collections.namedtuple('ExpertTransitionGym', 'obs action reward done log_probs value')
+
 def normalize_observation(obs):
     """Normalize observation data."""
     obs = np.clip(obs, 0, 0.32)
@@ -16,13 +18,15 @@ def normalizeTransition(d):
     """General function to normalize transitions that works with different types of ExpertTransition."""
     new_obs = normalize_observation(d.obs)
 
-    if hasattr(d, 'next_obs'):
+    if hasattr(d, 'next_obs') and hasattr(d, 'expert_action'):
         # Normalizing next_obs only if it exists
         new_next_obs = normalize_observation(d.next_obs)
         return ExpertTransition(d.state, new_obs, d.action, d.reward, d.next_state, new_next_obs, d.done, d.step_left, d.expert)
-    else:
+    
+    # don't necessarily need to normalize our transitions
+    elif hasattr(d, 'expert_action'):
         # For ExpertTransitionPPO which does not have next_obs
-        return ExpertTransitionPPO(d.state, new_obs, d.action, d.reward, d.done, d.step_left, d.expert_action, d.log_probs, d.value)
+        return ExpertTransitionGym(d.obs, d, action, d.reward, d.done, d.log_probs, d.value)
 
 def normalizeTransitionOffline(d: ExpertTransitionOffline):
     obs = np.clip(d.obs, 0, 0.32)

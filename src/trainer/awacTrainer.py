@@ -1,5 +1,4 @@
-
-from src.trainer.bulletTrainer import bulletTrainer
+from src.trainer.gymTrainer import gymTrainer
 from src.utils.misc import ExpertTransition, normalizeTransition, store_returns
 import numpy as np
 import torch
@@ -11,7 +10,8 @@ from tqdm import tqdm
 
 device = torch.device('cuda')
 
-class sacBulletTrainer(bulletTrainer):
+
+class awacTrainer(gymTrainer):
     # need a large batch size to learn stably
     def __init__(self, agent: sacBullet, anneal_lr=False, anneal_exp=False, total_time_steps=100000, num_env_steps=1024,
     num_processes=5, pretrain_episodes=5000, bc_episodes=100, num_eval_episodes=1, track=False, batch_size=64, expert_weight=0.01,

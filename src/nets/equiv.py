@@ -1,6 +1,9 @@
 from e2cnn import nn, gspaces
 import torch
 from torch.distributions import Normal
+import sys
+sys.path.append('..')
+from src.nets.nets import SACGaussianPolicyBase
 
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
@@ -86,23 +89,7 @@ class EquivariantActor(torch.nn.Module):
         log_std = conv_out[:, self.action_dim:]
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
-class SACGaussianPolicyBase(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
 
-    def sample(self, x):
-        mean, log_std = self.forward(x)
-        std = log_std.exp()
-        normal = Normal(mean, std)
-        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
-        y_t = torch.tanh(x_t)
-        action = y_t
-        log_prob = normal.log_prob(x_t)
-        # Enforcing Action Bound
-        log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
-        log_prob = log_prob.sum(1, keepdim=True)
-        mean = torch.tanh(mean)
-        return action, log_prob, mean
 
 class EquivariantSACActor(SACGaussianPolicyBase):
     """
@@ -224,6 +211,45 @@ class EquivariantSACCritic(torch.nn.Module):
         out1 = self.critic_1(cat_geo).tensor.reshape(batch_size, 1)
         out2 = self.critic_2(cat_geo).tensor.reshape(batch_size, 1)
         return out1, out2
+    
+class EquivariantAWACCritic(torch.nn.Module):
+    """
+    Equivariant AWAC's invariant critic
+    """
+    def __init__(self, obs_shape=(2, 128, 128), action_dim=5, n_hidden=128, initialize=True, N=4, enc_id=1):
+        super().__init__()
+        self.obs_channel = obs_shape[0]
+        self.n_hidden = n_hidden
+        self.c4_act = gspaces.Rot2dOnR2(N)
+        enc = getEnc(obs_shape[1], enc_id)
+        self.img_conv = enc(self.obs_channel, n_hidden, initialize, N)
+        self.n_rho1 = 2 if N==2 else 1
+
+        self.critic = torch.nn.Sequential(
+            # mixed representation including n_hidden regular representations (for the state),
+            # (action_dim-2) trivial representations (for the invariant actions)
+            # and 1 standard representation (for the equivariant actions)
+            nn.R2Conv(nn.FieldType(self.c4_act, n_hidden * [self.c4_act.regular_repr] + (action_dim-2) * [self.c4_act.trivial_repr] + self.n_rho1*[self.c4_act.irrep(1)]),
+                      nn.FieldType(self.c4_act, n_hidden * [self.c4_act.regular_repr]),
+                      kernel_size=1, padding=0, initialize=initialize),
+            nn.ReLU(nn.FieldType(self.c4_act, n_hidden * [self.c4_act.regular_repr]), inplace=True),
+            nn.GroupPooling(nn.FieldType(self.c4_act, n_hidden * [self.c4_act.regular_repr])),
+            nn.R2Conv(nn.FieldType(self.c4_act, n_hidden * [self.c4_act.trivial_repr]),
+                      nn.FieldType(self.c4_act, 1 * [self.c4_act.trivial_repr]),
+                      kernel_size=1, padding=0, initialize=initialize),
+        )
+
+    def forward(self, obs, act):
+        batch_size = obs.shape[0]
+        obs_geo = nn.GeometricTensor(obs, nn.FieldType(self.c4_act, self.obs_channel*[self.c4_act.trivial_repr]))
+        conv_out = self.img_conv(obs_geo)
+        dxy = act[:, 1:3]
+        inv_act = torch.cat((act[:, 0:1], act[:, 3:]), dim=1)
+        n_inv = inv_act.shape[1]
+        cat = torch.cat((conv_out.tensor, inv_act.reshape(batch_size, n_inv, 1, 1), dxy.reshape(batch_size, 2, 1, 1)), dim=1)
+        cat_geo = nn.GeometricTensor(cat, nn.FieldType(self.c4_act, self.n_hidden * [self.c4_act.regular_repr] + n_inv * [self.c4_act.trivial_repr] + self.n_rho1*[self.c4_act.irrep(1)]))
+        out = self.critic(cat_geo).tensor.reshape(batch_size, 1)
+        return out
 
 
 # a class for the equivariant vision transformer

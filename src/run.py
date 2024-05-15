@@ -6,11 +6,12 @@ from src.trainer.ppoBulletTrainer import ppoBulletTrainer
 from src.policies.ppoBullet import ppoBullet
 from src.trainer.sacBulletTrainer import sacBulletTrainer
 from src.trainer.ppoBulletTrainer import ppoBulletTrainer
-from src.trainer.sacBulletOfflineTrainer import sacBulletOfflineTrainer
+from src.trainer.awacBulletTrainer import awacBulletTrainer 
 from src.policies.sacBullet import sacBullet
+from src.policies.awacBullet import awacBullet
 from src.utils.env_wrapper import EnvWrapper
-from src.nets.base_cnns import vitSACActor, vitSACCritic, SACCritic, SACGaussianPolicy, PPOCritic, PPOGaussianPolicy, vitPPOActor
-from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor
+from src.nets.base_cnns import vitSACActor, vitSACCritic, SACCritic, SACGaussianPolicy, PPOCritic, PPOGaussianPolicy, vitPPOActor, AWACCritic
+from src.nets.equiv import EquivariantActor, EquivariantCritic, EquivariantSACCritic, EquivariantSACActor, EquivariantAWACCritic
 import numpy as np
 import torch
 
@@ -28,7 +29,7 @@ def str2bool(v):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_in_bowl')
+    parser.add_argument('-id', '--gym_id', type=str, help='Id of the environment that we will use', default='close_loop_block_pushing')
     parser.add_argument('-render', '--render', type=str2bool, help='Whether or not to render the environment', default=False, nargs='?', const=False)
     parser.add_argument('-num_processes', '--num_processes', type=int, help='Number of processes', default=5)
     parser.add_argument('-track', '--track', type=str2bool, help='Track the rewards', default=False, nargs='?', const=False)
@@ -43,6 +44,7 @@ if __name__=='__main__':
     parser.add_argument('-tre', '--training_episodes', type=int, default=1000)
     parser.add_argument('-rid', '--run_id', type=str, help='Run identification number', default=0)
     parser.add_argument('-et', '--encoder_type', type=str, default='base')
+    parser.add_argument('-evep', '--eval_episodes', type=int, default=100)
 
     parser.add_argument('-mgn', '--max_grad_norm', type=float, help='the maximum norm for the gradient clipping', default=0.5)
     parser.add_argument('-tkl', '--target_kl',type=float, help='The KL divergence that we will not exceed', default=None)
@@ -55,7 +57,12 @@ if __name__=='__main__':
     parser.add_argument('-nm', '--num_minibatches', type=int, help='Number of minibatches', default=4)
     parser.add_argument('-expw', '--expert_weight', type=float, help='How much do we want the expert trajectory to contribute?', default=0.9)
 
-    parser.add_argument('-mxp', '--mixed_expert_episodes', type=int, help='Number of mixed expert episodes for offline training', default=10000)
+    parser.add_argument('-ldep', '--load_episodes', type=str2bool, help='Load our episodes or not', default=False, nargs='?', const=False)
+    parser.add_argument('-buffp', '--buffer_path', type=str, help='Path to stored buffer for offline training', default=None)
+    parser.add_argument('-buffid', '--buffer_id', type=int, help='ID of the buffer', default=0)
+
+
+    parser.add_argument('-mxp', '--mixed_expert_episodes', type=int, help='Number of mixed expert episodes for offline training', default=100)
     args = parser.parse_args()
 
     simulator='pybullet'
@@ -90,27 +97,38 @@ if __name__=='__main__':
     encoder_type=args.encoder_type
     algo = args.algorithm
 
-    if algo == 'sac' or algo == 'sacoffline':
-        if encoder_type == 'base':
-            actor = SACGaussianPolicy().cuda()
-            critic = SACCritic().cuda()
-        elif encoder_type == 'equiv':
+    if algo == 'sac':
+        if encoder_type == 'equiv':
             actor = EquivariantSACActor().cuda()
             critic = EquivariantSACCritic().cuda()
+        elif encoder_type == 'base':
+            actor = SACGaussianPolicy().cuda()
+            critic = SACCritic().cuda()
         elif encoder_type == 'vit':
             actor = vitSACActor().cuda()
             critic = vitSACCritic().cuda()
         agent = sacBullet()
-        if algo == 'sac':
-            trainer = sacBulletTrainer(agent, num_processes=args.num_processes, 
-                track=args.track, pretrain_episodes=args.pretrain_episodes, bc_episodes=args.bc_episodes,
-                save_path=args.save_path, run_id=args.run_id)
-            trainer.run(simulator, env_config, planner_config, args.gym_id, actor, critic, encoder_type)
-        else:
-            trainer = sacBulletOfflineTrainer(agent, num_processes=args.num_processes, 
-                track=args.track, pretrain_episodes=args.pretrain_episodes, bc_episodes=args.bc_episodes,
-                save_path=args.save_path, run_id=args.run_id, episode_save_path=args.episode_save_path, mixed_expert_episodes=args.mixed_expert_episodes)
-            trainer.run(simulator, env_config, planner_config, args.gym_id, actor, critic, encoder_type)
+        trainer = sacBulletTrainer(agent, num_processes=args.num_processes, 
+            track=args.track, pretrain_episodes=args.pretrain_episodes, bc_episodes=args.bc_episodes,
+            save_path=args.save_path, run_id=args.run_id)
+        trainer.run(simulator, env_config, planner_config, args.gym_id, actor, critic, encoder_type)
+    elif algo == 'awac':
+        if encoder_type == 'equiv':
+            actor = EquivariantSACActor().cuda()
+            critic = EquivariantAWACCritic().cuda()
+        elif encoder_type == 'base':
+            actor = SACGaussianPolicy().cuda()
+            critic = AWACCritic().cuda()
+        elif encoder_type == 'vit':
+            raise ValueError('Not yet implemented')
+        agent = awacBullet()
+        critic = EquivariantAWACCritic().cuda()
+        trainer = awacBulletTrainer(agent, num_processes=args.num_processes, 
+            track=args.track, pretrain_episodes=args.pretrain_episodes, bc_episodes=args.bc_episodes,
+            save_path=args.save_path, run_id=args.run_id, episode_save_path=args.episode_save_path, 
+            mixed_expert_episodes=args.mixed_expert_episodes, load_episodes=args.load_episodes,
+            buffer_run_id=args.buffer_id, buffer_path=args.buffer_path)
+        trainer.run(simulator, env_config, planner_config, args.gym_id, actor, critic, encoder_type)
     elif algo == 'ppo':
         if encoder_type == 'base':
             actor = PPOGaussianPolicy().cuda()

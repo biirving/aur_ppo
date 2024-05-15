@@ -175,12 +175,19 @@ def sac(render, save_path=None, ac_kwargs=dict(), seed=0,
     #replay_buffer = QLearningBufferAug(replay_size)
     replay_buffer = QLearningBuffer(replay_size)
 
-    agent.train()
+    #agent.train()
+
+    # so this shit doesn't generalize?
+    #pretrained_agent = torch.load('/scratch/irving.b/rl/close_loop_block_in_bowl_agent.pt')
+    #pretrained_critic = torch.load('/scratch/irving.b/rl/close_loop_block_in_bowl_critic.pt')
+    #agent.pi.load_state_dict(pretrained_agent)
+    #agent.critic.load_state_dict(pretrained_critic)
 
     # using behavioral cloning before SAC training loop
     mse_envs = envs
     behavioral_clone(mse_envs, agent, bc_episodes)
     evaluate(0, num_test_episodes, test_envs, agent, eval_returns)
+    sys.exit()
 
     counter = 0
     update_counter = 0

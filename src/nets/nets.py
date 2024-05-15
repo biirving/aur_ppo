@@ -68,20 +68,20 @@ class SACGaussianPolicyBase(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-    def sample(self, x):
+    def sample(self, x, x_t=None):
         mean, log_std = self.forward(x)
         std = log_std.exp()
         normal = Normal(mean, std)
-        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+        if x_t is None:
+            x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
         y_t = torch.tanh(x_t)
-        action = y_t
+        x_t = y_t
         log_prob = normal.log_prob(x_t)
         # Enforcing Action Bound
         log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean)
-        return action, log_prob, mean
-
+        return x_t, log_prob, mean
 
 class PPOGaussianPolicyBase(torch.nn.Module):
     def __init__(self):

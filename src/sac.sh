@@ -1,5 +1,5 @@
 #!/bin/bash
-encoder_type='vit'
+encoder_type='equiv'
 bc_episodes=5000
 batch=64
 env='close_loop_block_in_bowl'

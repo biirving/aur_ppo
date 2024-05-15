@@ -332,5 +332,5 @@ class ppoBullet(bulletArmPolicy):
                     sys.exit()
 
     def save_agent(self, path):
-        torch.save(self.pi.state_dict(), path + '/' + env + self.encoder_type +  '_agent.pt')
-        torch.save(self.critic.state_dict(), path + '/' + env + self.encoder_type + '_critic.pt')
+        torch.save(self.pi.state_dict(), path + '/' + env + '_' + self.encoder_type +  '_agent.pt')
+        torch.save(self.critic.state_dict(), path + '/' + env + '_' + self.encoder_type + '_critic.pt')

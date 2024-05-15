@@ -7,7 +7,7 @@ from tqdm import tqdm
 import copy
 
 class bulletTrainer(policyTrainer):
-    def __init__(self,  total_time_steps, num_env_steps, num_processes, save_path=None, aug=False, do_pretraining=True, track=False, run_id=0):
+    def __init__(self,  total_time_steps, num_env_steps, num_processes, save_path=None, aug=False, do_pretraining=True, track=False, run_id=0, transition_type='base'):
         super().__init__(track, run_id)
         self.aug=aug
         self.num_env_steps = num_env_steps
@@ -15,7 +15,7 @@ class bulletTrainer(policyTrainer):
         #if aug:
         #    self.replay_buffer = QLearningBufferAug(total_time_steps)
         #else:
-        self.replay_buffer = QLearningBuffer(total_time_steps)
+        self.replay_buffer = QLearningBuffer(total_time_steps, transition_type=transition_type)
         self.num_processes = num_processes
         self.do_pretraining = do_pretraining
         self.returns = store_returns(num_processes)

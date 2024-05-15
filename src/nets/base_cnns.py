@@ -112,6 +112,24 @@ class SACCritic(nn.Module):
         out_2 = self.critic_fc_2(torch.cat((conv_out, act), dim=1))
         return out_1, out_2
 
+# similar amount of parameters
+class AWACCritic(nn.Module):
+    def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
+        super().__init__()
+        self.state_conv_1 = base_encoder(obs_shape, 128)
+
+        self.critic = torch.nn.Sequential(
+            torch.nn.Linear(128+action_dim, 128),
+            nn.ReLU(inplace=True),
+            torch.nn.Linear(128, 1)
+        )
+        self.apply(weights_init)
+
+    def forward(self, obs, act):
+        conv_out = self.state_conv_1(obs)
+        out = self.critic_fc_1(torch.cat((conv_out, act), dim=1))
+        return out
+
 class SACGaussianPolicy(SACGaussianPolicyBase):
     def __init__(self, obs_shape=(2, 128, 128), action_dim=5):
         super().__init__()

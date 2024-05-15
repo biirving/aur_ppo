@@ -1,3 +1,4 @@
+
 from src.policies.bulletArmPolicy import bulletArmPolicy
 import torch
 from torch import nn
@@ -6,7 +7,20 @@ from copy import deepcopy
 import numpy as np
 import sys
 
-class sacBullet(bulletArmPolicy):
+
+class tapaBullet(bulletArmPolicy):
+    """
+
+    Task-agnostic Policy Alignment
+
+    Online outer loop, which informs the hyperparameters of an offline inner loop (AWAC)
+
+    This is going to be a doosy
+
+    Lets have a moment of true reflection
+
+    """
+
     def __init__(self, alpha=1e-2, actor_lr=1e-3, critic_lr=1e-3, alpha_lr=1e-3, gamma=0.99, target_update_frequency=1):
         super().__init__()
         self.alpha = alpha
