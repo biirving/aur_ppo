@@ -75,8 +75,10 @@ class SACGaussianPolicyBase(torch.nn.Module):
         if x_t is None:
             x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
         y_t = torch.tanh(x_t)
-        x_t = y_t
+        # log-density of the pre-tanh sample x_t, then the tanh change-of-variables term;
+        # evaluating normal.log_prob at y_t = tanh(x_t) gave the wrong density
         log_prob = normal.log_prob(x_t)
+        x_t = y_t
         # Enforcing Action Bound
         log_prob -= torch.log((1 - y_t.pow(2)) + epsilon)
         log_prob = log_prob.sum(1, keepdim=True)
