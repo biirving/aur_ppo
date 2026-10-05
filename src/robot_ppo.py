@@ -4,7 +4,7 @@ from src.nets.nets import discrete_net, continuous_net, critic
 from torch.distributions import MultivariateNormal, Categorical
 import gym
 import time
-from models import robot_actor_critic
+from models.robot_actor_critic import robot_actor_critic
 import numpy as np
 import matplotlib.pyplot as plt
 import sys, os, time
@@ -28,7 +28,9 @@ class torch_buffer():
 		self.actions = torch.zeros((num_steps, num_envs, action_shape))
 		# to store the actions from the expert rollout
 		self.true_actions = torch.zeros((num_steps, num_envs, action_shape))
-		self.log_probs = torch.zeros((num_steps, num_envs, action_shape))
+		# one summed log-prob per (step, env); a trailing action dim broadcast the value
+		# five times and misaligned b_logprobs with the other flattened tensors
+		self.log_probs = torch.zeros((num_steps, num_envs))
 		self.rewards = torch.zeros((num_steps, num_envs))
 		self.terminals = torch.zeros((num_steps, num_envs))
 		self.values = torch.zeros((num_steps, num_envs))
@@ -174,7 +176,9 @@ class robot_ppo():
 			true_action, scaled = self.policy.getActionFromPlan(true_action)
 			#_, true_action, _, _, _ = self.policy.evaluate(next_state.to(device), next_obs.to(device))
 		self.buffer.true_actions[step] = true_action 
-		next_states, next_obs, reward, done = self.envs.step(actions)
+		# auto_reset: without it finished envs are never reset and report done=True on every
+		# later step, which turns GAE into one-step returns
+		next_states, next_obs, reward, done = self.envs.step(actions, auto_reset=True)
 		# next_states, next_obs, reward, done, dist = self.envs.step(actions)
 		# print('distance', dist)
 		# more negative rewards for greater distances
@@ -193,7 +197,6 @@ class robot_ppo():
 				#print('Episode length', episode_length)
 				writer.add_scalar("charts/discounted_episodic_return", discounted_return, global_step)
 				writer.add_scalar("charts/episodic_length", episode_length, global_step)
-				break
 		return next_states, next_obs, next_done
 
 
@@ -227,8 +230,8 @@ class robot_ppo():
 		print('values', buffer.values.shape)
 
 		lastgaelam = 0
-		for t in reversed(range(num_steps - 1)):
-			if t == self.num_steps - 1:
+		for t in reversed(range(num_steps)):
+			if t == num_steps - 1:
 				nextnonterminal = 1.0 - next_done
 				nextvalues = next_value
 			else:
@@ -297,8 +300,11 @@ class robot_ppo():
 		for ep in range(update_epochs):
 			np.random.shuffle(b_inds)
 			for index in range(0, batch_size, minibatch_size):
-				mb_inds = b_inds[index:index+self.minibatch_size]
-				expert_loss = nn.functional.mse_loss(b_actions[mb_inds].requires_grad_(True), b_true_actions[mb_inds])#+ torch.tensor(sum(dists[mb_inds]))
+				mb_inds = b_inds[index:index+minibatch_size]
+				# The stored b_actions were sampled under no_grad, so they have no graph back to the
+				# actor; recompute the current policy's mean on the stored observations instead.
+				action_mean = self.policy.action_mean(b_states[mb_inds].to(device), b_obs[mb_inds].to(device))
+				expert_loss = nn.functional.mse_loss(action_mean, b_true_actions[mb_inds].to(device))
 				self.optimizer.zero_grad()
 				#loss = #self.expert_weight * expert_loss
 				#loss = expert_loss
@@ -340,7 +346,7 @@ class robot_ppo():
 			for index in range(0, batch_size, minibatch_size):
 				mb_inds = b_inds[index:index+self.minibatch_size]
 				
-				_, _, newlogprob, entropy, newvalue = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device))
+				_, _, newlogprob, entropy, newvalue, action_mean = self.policy.evaluate(b_states[mb_inds].to(device), b_obs[mb_inds].to(device), b_actions[mb_inds].to(device), return_mean=True)
 
 				old_log_probs = b_logprobs[mb_inds]
 				print(old_log_probs.shape)
@@ -394,11 +400,12 @@ class robot_ppo():
 				# change this to be the KL divergence
 				# they use a lagrangian equation to optimize
 				#expert_loss = nn.functional.kl_div(b_actions[mb_inds], b_true_actions[mb_inds])
-				expert_loss = nn.functional.mse_loss(b_actions[mb_inds], b_true_actions[mb_inds])
+				# b_actions are constants from the rollout; use the current policy mean so this term has a gradient
+				expert_loss = nn.functional.mse_loss(action_mean, b_true_actions[mb_inds])
 				loss = policy_loss - self.entropy_coeff * entropy_loss + value_loss + self.expert_weight * expert_loss
 
 				loss.backward()
-				nn.utils.clip_grad_norm_(self.policy.actor.parameters(), self.max_grad_norm)
+				nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 				self.optimizer.step()
 				self.optimizer.zero_grad()
 
@@ -438,7 +445,7 @@ class robot_ppo():
 			returns = returns.to(device)
 			advantages = advantages.to(device)
 			flattened_pretrain_buffer = self.pretrain_buffer.flatten(returns, advantages)
-			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size)
+			self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.total_pretrain_steps, self.pretrain_minibatch_size)
 			# self.pretrain_update(flattened_pretrain_buffer, self.num_update_epochs, self.pretrain_batch_size, self.pretrain_minibatch_size, distances)
 			self.pretrain_buffer.load_to_cpu()
 			self.test_env(writer)

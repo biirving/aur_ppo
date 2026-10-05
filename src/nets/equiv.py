@@ -87,6 +87,10 @@ class EquivariantActor(torch.nn.Module):
         inv_act = conv_out[:, 2:self.action_dim]
         mean = torch.cat((inv_act[:, 0:1], dxy, inv_act[:, 1:]), dim=1)
         log_std = conv_out[:, self.action_dim:]
+        # dx and dy must share one std: a 90 degree rotation swaps them, so separate
+        # (invariant) stds make the action distribution non-equivariant
+        dxy_log_std = log_std[:, 1:3].mean(dim=1, keepdim=True).expand(-1, 2)
+        log_std = torch.cat((log_std[:, 0:1], dxy_log_std, log_std[:, 3:]), dim=1)
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
 
@@ -121,6 +125,10 @@ class EquivariantSACActor(SACGaussianPolicyBase):
         inv_act = conv_out[:, 2:self.action_dim]
         mean = torch.cat((inv_act[:, 0:1], dxy, inv_act[:, 1:]), dim=1)
         log_std = conv_out[:, self.action_dim:]
+        # dx and dy must share one std: a 90 degree rotation swaps them, so separate
+        # (invariant) stds make the action distribution non-equivariant
+        dxy_log_std = log_std[:, 1:3].mean(dim=1, keepdim=True).expand(-1, 2)
+        log_std = torch.cat((log_std[:, 0:1], dxy_log_std, log_std[:, 3:]), dim=1)
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
 

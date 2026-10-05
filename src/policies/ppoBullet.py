@@ -121,51 +121,34 @@ class ppoBullet(bulletArmPolicy):
         return states, obs, old_log_probs, actions, expert, advantages, returns, values
 
     def run_gae(self, next_value, next_done):
+        batch_size, states, obs, actions, rewards, non_final_masks, steps_left, values, expert, log_probs = self._loadLossCalcDict()
+
+        # Transitions are stored step-major, so reshape to [steps, envs].
+        # non_final_masks[t] = 1 if the episode continues after step t (it is 1 - done, not done).
+        rewards = rewards.reshape(batch_size, self.num_processes)
+        masks = non_final_masks.reshape(batch_size, self.num_processes)
+        values = values.reshape(batch_size, self.num_processes)
+        advantages = torch.zeros_like(rewards)
         lastgaelam = 0
-
-        batch_size, states, obs, actions, rewards, dones, steps_left, values, expert, log_probs = self._loadLossCalcDict()
-
-        # Reshaping due to nature of buffer
-        advantages = torch.zeros(batch_size, self.num_processes).cuda()
-        rewards = rewards.reshape(batch_size, self.num_processes).cuda()
-        dones = dones.reshape(batch_size, self.num_processes).cuda()
-        values = values.reshape(batch_size, self.num_processes).cuda()
         for t in reversed(range(batch_size)):
-            if t == batch_size - 1:
-                nextnonterminal = 1.0 - next_done
-                nextvalues = next_value
-            else:
-                nextnonterminal = 1.0 - dones[t + 1]
-                nextvalues = values[t + 1]
-        # If episode finishes after timestep t, we mask the value and the previous advantage value, 
-        # so that advantages[t] stores the (reward - value) at that timestep without
-        # taking a value from the next episode, or storing a value in this episode to be multiplied
-        # in the calculation of the rollout of the next episode
-        delta = rewards[t] + self.gamma * nextvalues * nextnonterminal - values[t]
-        what = delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
-        advantages[t] = lastgaelam = delta + self.gamma * self.gae_lambda * nextnonterminal * lastgaelam
+            nextvalues = next_value if t == batch_size - 1 else values[t + 1]
+            # mask the bootstrap and the carried advantage at episode boundaries
+            delta = rewards[t] + self.gamma * nextvalues * masks[t] - values[t]
+            advantages[t] = lastgaelam = delta + self.gamma * self.gae_lambda * masks[t] * lastgaelam
         returns = advantages + values
+        return returns.reshape(-1), advantages.reshape(-1)
 
-        # flatten these before returning
-        returns = returns.reshape(-1)
-        advantages = advantages.reshape(-1)
-        return returns, advantages
-
-    # these can be stored in a separate file
     def normal_advantage(self, next_value, next_done):
-        batch_size, states, obs, actions, rewards, dones, steps_left, values, expert, log_probs = self._loadLossCalcDict()
-        # the default rollout scheme
-        returns = torch.zeros_like(rewards).to(device)
+        batch_size, states, obs, actions, rewards, non_final_masks, steps_left, values, expert, log_probs = self._loadLossCalcDict()
+        rewards = rewards.reshape(batch_size, self.num_processes)
+        masks = non_final_masks.reshape(batch_size, self.num_processes)
+        values = values.reshape(batch_size, self.num_processes)
+        returns = torch.zeros_like(rewards)
         for t in reversed(range(batch_size)):
-            if t == batch_size - 1:
-                nextnonterminal = 1.0 - next_done
-                next_return = next_value
-            else:
-                nextnonterminal = 1.0 - buffer.terminals[t + 1]
-                next_return = returns[t + 1]
-            returns[t] = rewards[t] + self.gamma * nextnonterminal * next_return
+            next_return = next_value if t == batch_size - 1 else returns[t + 1]
+            returns[t] = rewards[t] + self.gamma * masks[t] * next_return
         advantages = returns - values
-        return returns, advantages
+        return returns.reshape(-1), advantages.reshape(-1)
 
     # TODO: CHECK TENSOR SHAPING
     def advantages(self, next_obs, next_value, next_done):
@@ -180,15 +163,19 @@ class ppoBullet(bulletArmPolicy):
     def compute_loss_pi(self, mb_inds):
 
         states, obs, old_log_probs, actions, expert, advantages, returns, values = self.get_buffer_values(mb_inds)
-        # we want our gradients collected directly
-        a, newlogprob, mean, entropy = self.pi.sample(obs.cuda())
+        # PPO needs the log-prob of the *stored* action under the current policy; sampling a
+        # fresh action made the ratio meaningless. Stored actions are post-tanh, sample()
+        # expects the pre-tanh value.
+        pre_tanh = torch.atanh(actions.cuda().clamp(-1 + 1e-6, 1 - 1e-6))
+        a, newlogprob, mean, entropy = self.pi.sample(obs.cuda(), action=pre_tanh)
         old_log_probs = old_log_probs.squeeze(dim=1)
         newlogprob = newlogprob.squeeze(dim=1)
         print('new log prob', newlogprob)
         log_ratio = newlogprob - old_log_probs
         print('log ratio', log_ratio)
         ratio = log_ratio.exp()
-        mb_advantages = advantages[mb_inds]
+        # get_buffer_values already indexed by mb_inds
+        mb_advantages = advantages
         # 1e-8 avoids division by 0
         print('prenorm adv', mb_advantages)
 
@@ -204,7 +191,8 @@ class ppoBullet(bulletArmPolicy):
 
         print('policy loss', policy_loss)
         # want to make sure that this expert loss is being computed correctly
-        expert_loss = nn.functional.mse_loss(a, expert)
+        # `a` is now the stored action (a constant); regress the policy mean onto the expert instead
+        expert_loss = nn.functional.mse_loss(mean, expert)
         # adding the mse here
         loss = policy_loss + self.expert_weight * expert_loss 
 

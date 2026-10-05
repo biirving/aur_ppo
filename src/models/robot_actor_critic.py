@@ -101,16 +101,23 @@ class robot_actor_critic(nn.Module):
 		else:
 			return self.decodeActions(unscaled_p, unscaled_dx, unscaled_dy, unscaled_dz)
 
-	def evaluate(self, state, obs, action=None):
+	def _actor_forward(self, state, obs):
 		# so the state is whether the gripper is open or closed
 		state_tile = state.reshape(state.size(0), 1, 1, 1).repeat(1, 1, obs.shape[2], obs.shape[3])
 		cat_obs = torch.cat([obs, state_tile], dim=1).to(self.device)
-		
 		if(self.equivariant):
 			action_mean, action_logstd = self.actor(cat_obs)
 		else:
 			action_mean = self.actor(cat_obs)
 			action_logstd = self.actor_logstd.expand_as(action_mean)
+		return cat_obs, action_mean, action_logstd
+
+	def action_mean(self, state, obs):
+		"""Mean of the policy in unscaled [-1, 1] action units, with gradients (for behavior cloning)."""
+		return self._actor_forward(state, obs)[1]
+
+	def evaluate(self, state, obs, action=None, return_mean=False):
+		cat_obs, action_mean, action_logstd = self._actor_forward(state, obs)
 
 		action_std = torch.exp(action_logstd)
 		dist = Normal(action_mean, action_std)
@@ -128,6 +135,8 @@ class robot_actor_critic(nn.Module):
 		#action_mean = torch.tanh(action_mean)
 		entropy = dist.entropy()		
 		unscaled_actions, actions = self.decodeActions(*[action[:, i] for i in range(self.n_a)])
+		if return_mean:
+			return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs), action_mean
 		return actions, unscaled_actions, log_prob.sum(1), entropy.sum(1), self.critic(cat_obs)
 
 	# pretrain the actor alone
